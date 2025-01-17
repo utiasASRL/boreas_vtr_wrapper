@@ -30,14 +30,14 @@ git submodule update --init --remote
 
 Reference: https://github.com/utiasASRL/vtr3/wiki/Installation-Guide
 
-## Download vtr_testing_radar
+## Download boreas_vtr_wrapper
 
 This package contains testing code for lidar and radar pipeline. Download it do your local filesystem.
 
 ```Bash
 cd ${VTRROOT}
-git clone git@github.com:cheneyuwu/vtr_testing_radar.git
-cd vtr_testing_radar
+git clone git@github.com:utiasASRL/boreas_vtr_wrapper.git
+cd boreas_vtr_wrapper
 git checkout aeva_cov_interp
 ```
 
@@ -96,12 +96,12 @@ colcon build --symlink-install --packages-up-to vtr_lidar vtr_radar vtr_radar_li
 
 wait until it finishes.
 
-## Build and Install vtr_testing_radar (this package)
+## Build and Install boreas_vtr_wrapper (this package)
 
 ```Bash
 source /opt/ros/galactic/setup.bash
 source ${VTRSRC}/main/install/setup.bash # source the vtr3 environment
-cd ~/ASRL/vtr_testing_radar # go to where this repo is located
+cd ~/ASRL/boreas_vtr_wrapper # go to where this repo is located
 colcon build --symlink-install
 ```
 
@@ -149,7 +149,7 @@ ros2 run rqt_reconfigure rqt_reconfigure
 ## Odometry (Teach) and Localization (Repeat)
 
 ```Bash
-export VTRRROOT=${VTRROOT}/vtr_testing_radar # location of this repository CHANGE THIS!
+export VTRRROOT=${VTRROOT}/boreas_vtr_wrapper # location of this repository CHANGE THIS!
 export VTRRDATA=${VTRDATA}/boreas/sequences  # dataset location (where the boreas-xxxxx folders at) CHANGE THIS!
 export VTRRRESULT=${VTRTEMP}/radar/boreas    # default result location
 mkdir -p ${VTRRRESULT}
@@ -164,15 +164,15 @@ LOC_INPUT=boreas-2021-01-26-10-59
 
 Odometry:
 ```Bash
-bash ${VTRRROOT}/src/vtr_testing_radar/script/test_odometry.sh ${ODO_INPUT}
-bash ${VTRRROOT}/src/vtr_testing_radar/script/test_odometry_eval.sh ${ODO_INPUT}
+bash ${VTRRROOT}/src/boreas_vtr_wrapper/script/test_odometry.sh ${ODO_INPUT}
+bash ${VTRRROOT}/src/boreas_vtr_wrapper/script/test_odometry_eval.sh ${ODO_INPUT}
 ```
 
 Localization:
 ```Bash
-bash ${VTRRROOT}/src/vtr_testing_radar/script/test_localization.sh ${ODO_INPUT} ${LOC_INPUT}
+bash ${VTRRROOT}/src/boreas_vtr_wrapper/script/test_localization.sh ${ODO_INPUT} ${LOC_INPUT}
 # Evaluation:
-bash ${VTRRROOT}/src/vtr_testing_radar/script/test_localization_eval.sh ${ODO_INPUT}
+bash ${VTRRROOT}/src/boreas_vtr_wrapper/script/test_localization_eval.sh ${ODO_INPUT}
 ```
 
 
@@ -195,7 +195,7 @@ bash <path to parallel_test_odometry.sh or parallel_test_localization.sh>
 For example,
 
 ```
-bash ${VTRRROOT}/src/vtr_testing_radar/script/parallel_test_localization.sh
+bash ${VTRRROOT}/src/boreas_vtr_wrapper/script/parallel_test_localization.sh
 ```
 
 Then monitor progress by going to the log file of each test.
@@ -206,7 +206,7 @@ The log file should be located at
 
 Understand what these scripts do:
 
-Using `parallel_test_odometry.sh` from `src/vtr_testing_radar/script` as an example, the script does the following:
+Using `parallel_test_odometry.sh` from `src/boreas_vtr_wrapper/script` as an example, the script does the following:
 
 1. Define sequences we need to run for odometry
 
@@ -242,7 +242,7 @@ For `VTRRDATA`, it is supposed to be the directory that contains all boreas sequ
 
 ```
 # define the following environment variables VTRR=VTR RaDAR
-export VTRRROOT=${VTRROOT}/vtr_testing_radar # location of this repository CHANGE THIS!
+export VTRRROOT=${VTRROOT}/boreas_vtr_wrapper # location of this repository CHANGE THIS!
 export VTRRDATA=${VTRDATA}/boreas/sequences  # dataset location (where the boreas-xxxxx folders at) CHANGE THIS!
 export VTRRRESULT=${VTRTEMP}/radar/boreas    # result location MAYBE CHANGE THIS!
 mkdir -p ${VTRRRESULT}
@@ -251,8 +251,8 @@ mkdir -p ${VTRRRESULT}
 4. Define path to test scripts
 
 ```
-ODOMETRY_SCRIPT="${VTRRROOT}/src/vtr_testing_radar/script/test_odometry.sh"
-ODOMETRY_EVAL_SCRIPT="${VTRRROOT}/src/vtr_testing_radar/script/test_odometry_eval.sh"
+ODOMETRY_SCRIPT="${VTRRROOT}/src/boreas_vtr_wrapper/script/test_odometry.sh"
+ODOMETRY_EVAL_SCRIPT="${VTRRROOT}/src/boreas_vtr_wrapper/script/test_odometry_eval.sh"
 ```
 
 These are bash scripts that will run odometry test (using `ros2 run ...`) and evaluation.

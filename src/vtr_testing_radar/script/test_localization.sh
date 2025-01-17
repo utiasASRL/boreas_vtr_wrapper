@@ -8,7 +8,7 @@ LOC_INPUT=$2
 if [ $# -eq 3 ]; then
   PARAM_FILE=$3
 else
-  PARAM_FILE=${VTRRROOT}/src/vtr_testing_radar/config/boreas.yaml
+  PARAM_FILE=${VTRRROOT}/src/boreas_vtr_wrapper/config/boreas.yaml
 fi
 
 # Log
