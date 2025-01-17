@@ -170,7 +170,7 @@ The log file should be located at
 
 Understand what these scripts do:
 
-Using `parallel_test_odometry.sh` from `src/boreas_vtr_wrapper/script` as an example, the script does the following:
+Using `parallel_test_odometry.sh` from `src/vtr_testing_radar/script` as an example, the script does the following:
 
 1. Define sequences we need to run for odometry
 
@@ -221,8 +221,8 @@ mkdir -p ${VTRRRESULT}
 4. Define path to test scripts
 
 ```
-ODOMETRY_SCRIPT="${VTRRROOT}/src/boreas_vtr_wrapper/script/test_odometry.sh"
-ODOMETRY_EVAL_SCRIPT="${VTRRROOT}/src/boreas_vtr_wrapper/script/test_odometry_eval.sh"
+ODOMETRY_SCRIPT="${VTRRROOT}/src/vtr_testing_radar/script/test_odometry.sh"
+ODOMETRY_EVAL_SCRIPT="${VTRRROOT}/src/vtr_testing_radar/script/test_odometry_eval.sh"
 ```
 
 These are bash scripts that will run odometry test (using `ros2 run ...`) and evaluation.

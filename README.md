@@ -164,15 +164,15 @@ LOC_INPUT=boreas-2021-01-26-10-59
 
 Odometry:
 ```Bash
-bash ${VTRRROOT}/src/boreas_vtr_wrapper/script/test_odometry.sh ${ODO_INPUT}
-bash ${VTRRROOT}/src/boreas_vtr_wrapper/script/test_odometry_eval.sh ${ODO_INPUT}
+bash ${VTRRROOT}/src/vtr_testing_radar/script/test_odometry.sh ${ODO_INPUT}
+bash ${VTRRROOT}/src/vtr_testing_radar/script/test_odometry_eval.sh ${ODO_INPUT}
 ```
 
 Localization:
 ```Bash
-bash ${VTRRROOT}/src/boreas_vtr_wrapper/script/test_localization.sh ${ODO_INPUT} ${LOC_INPUT}
+bash ${VTRRROOT}/src/vtr_testing_radar/script/test_localization.sh ${ODO_INPUT} ${LOC_INPUT}
 # Evaluation:
-bash ${VTRRROOT}/src/boreas_vtr_wrapper/script/test_localization_eval.sh ${ODO_INPUT}
+bash ${VTRRROOT}/src/vtr_testing_radar/script/test_localization_eval.sh ${ODO_INPUT}
 ```
 
 
@@ -195,7 +195,7 @@ bash <path to parallel_test_odometry.sh or parallel_test_localization.sh>
 For example,
 
 ```
-bash ${VTRRROOT}/src/boreas_vtr_wrapper/script/parallel_test_localization.sh
+bash ${VTRRROOT}/src/vtr_testing_radar/script/parallel_test_localization.sh
 ```
 
 Then monitor progress by going to the log file of each test.
@@ -206,7 +206,7 @@ The log file should be located at
 
 Understand what these scripts do:
 
-Using `parallel_test_odometry.sh` from `src/boreas_vtr_wrapper/script` as an example, the script does the following:
+Using `parallel_test_odometry.sh` from `src/vtr_testing_radar/script` as an example, the script does the following:
 
 1. Define sequences we need to run for odometry
 
@@ -251,8 +251,8 @@ mkdir -p ${VTRRRESULT}
 4. Define path to test scripts
 
 ```
-ODOMETRY_SCRIPT="${VTRRROOT}/src/boreas_vtr_wrapper/script/test_odometry.sh"
-ODOMETRY_EVAL_SCRIPT="${VTRRROOT}/src/boreas_vtr_wrapper/script/test_odometry_eval.sh"
+ODOMETRY_SCRIPT="${VTRRROOT}/src/vtr_testing_radar/script/test_odometry.sh"
+ODOMETRY_EVAL_SCRIPT="${VTRRROOT}/src/vtr_testing_radar/script/test_odometry_eval.sh"
 ```
 
 These are bash scripts that will run odometry test (using `ros2 run ...`) and evaluation.

@@ -7,7 +7,7 @@ ODO_INPUT=$1
 if [ $# -eq 2 ]; then
   PARAM_FILE=$2
 else
-  PARAM_FILE=${VTRRROOT}/src/boreas_vtr_wrapper/config/boreas.yaml
+  PARAM_FILE=${VTRRROOT}/src/vtr_testing_radar/config/boreas.yaml
 fi
 
 # Log
