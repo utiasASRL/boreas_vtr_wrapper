@@ -164,6 +164,36 @@ def main(dataset_dir, result_dir, sensor_type):
       writer = csv.writer(file, delimiter=' ')
       writer.writerows(result)
       print("Written to file:", osp.join(output_dir, loc_input + ".txt"))
+      
+  if False:
+    bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "odometry_vel_result")
+    parser = BagFileParser(bag_file)
+    messages = parser.get_bag_messages("odometry_vel_result")
+
+    vel_results = []
+    for _, message in enumerate(messages):
+      w_v_r_robot = np.zeros((6))
+      w_v_r_robot[0] = message[1].linear.x
+      w_v_r_robot[1] = message[1].linear.y
+      w_v_r_robot[2] = message[1].linear.z
+      w_v_r_robot[3] = message[1].angular.x
+      w_v_r_robot[4] = message[1].angular.y
+      w_v_r_robot[5] = message[1].angular.z
+
+      w_r_v_lidar = np.zeros((6))
+      w_r_v_lidar[:3] = (- w_v_r_robot[:3].reshape(1, 3) @ T_robot_lidar_loc[:3, :3]).flatten()
+      w_r_v_lidar[3:] = (- w_v_r_robot[3:].reshape(1, 3) @ T_robot_lidar_loc[:3, :3]).flatten()
+
+      timestamp = int(int(message[0]) / 1000)
+      vel_results.append([timestamp] + w_r_v_lidar.flatten().tolist())
+    
+    output_dir = osp.join(result_dir, "localization_vel_result")
+    os.makedirs(output_dir, exist_ok=True)
+    with open(osp.join(output_dir, loc_input + "_vel.txt"), "+w") as file:
+      writer = csv.writer(file, delimiter=' ')
+      writer.writerows(vel_results)
+      print("Written to file:", osp.join(output_dir, loc_input + "_vel.txt"))
+
 
 
 if __name__ == "__main__":

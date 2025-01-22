@@ -14,6 +14,6 @@ source ${VTRRROOT}/install/setup.bash
 source ${VTRROOT}/venv/bin/activate
 
 #   - dump odometry result to boreas expected format (txt file)
-python ${VTRRROOT}/src/vtr_testing_aeva/script/boreas_generate_odometry_result.py --dataset ${VTRRDATA} --path ${VTRRRESULT}/${ODO_INPUT} 
+python ${VTRRROOT}/src/vtr_testing_aeva/script/boreas_generate_odometry_result.py --dataset ${VTRRDATA} --path ${VTRRRESULT}/${ODO_INPUT} --velocity
 #   - evaluate the result using the evaluation script
 python -m pyboreas.eval.odometry_aeva --gt ${VTRRDATA} --pred ${VTRRRESULT}/${ODO_INPUT}/odometry_result --data_type ${TYPE}

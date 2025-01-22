@@ -208,6 +208,7 @@ std::pair<int64_t, Eigen::MatrixXd> load_new_lidar(const std::string &path, doub
     // Temporary variables
     double x, y, z, radial_velocity, intensity, time_temp;
     int64_t time_keep;
+    uint64_t point_flags;
     int beam_id, line_id, face_id, sensor_id;
 
     // x, y, z
@@ -235,12 +236,12 @@ std::pair<int64_t, Eigen::MatrixXd> load_new_lidar(const std::string &path, doub
     time_temp = time_temp * 1e-9 + start_time;
     ++offset;
     // Point Flags (64 bit flag, only need first 32 bits)
-    uint64_t point_flags = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
+    point_flags = int(getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset));
 
     // Extract flags
-    line_id = 63 - (int)((point_flags >> 8) & 0xFF); // flip order
-    beam_id = (int)((point_flags >> 16) & 0xF);
-    face_id = (int)((point_flags >> 22) & 0xF);
+    line_id = ((point_flags >> 8) & 0xFF);
+    beam_id = ((point_flags >> 16) & 0xF);
+    face_id = ((point_flags >> 22) & 0xF);
 
     // Error checks
     if (line_id < 0 || line_id >= 64) continue;
@@ -410,19 +411,19 @@ int main(int argc, char **argv) {
   Eigen::setNbThreads(1);
 
   // TO DO: combine with aeva_boreas.yaml! don't want 2 configs
-  std::string yaml_file_path = "external/vtr_testing_radar/src/vtr_testing_aeva/config/aeva_boreas.yaml";
+  std::string yaml_file_path = "external/boreas_vtr_wrapper/src/vtr_testing_aeva/config/aeva_boreas.yaml";
   YAML::Node config = loadYamlFile(yaml_file_path);
 
   // load options
   int init_frame = 0;
   int last_frame = 100000;
   bool aeriesII = config["/**"]["ros__parameters"]["aeriesII"].as<bool>();
-  std::vector<double> temp = config["/**"]["ros__parameters"]["preprocessing"]["filtering"]["const_gyro_bias"].as<std::vector<double>>();
+  std::vector<double> temp = config["/**"]["ros__parameters"]["preprocessing"]["doppler_filtering"]["const_gyro_bias"].as<std::vector<double>>();
   std::vector<Eigen::Vector3d> const_gyro_bias;
   // temporarily commented out -- check if needed
-  // for (size_t i = 0; i < temp.size(); i += 3) {
-  //   const_gyro_bias.push_back(Eigen::Vector3d(temp[i], temp[i+1], temp[i+2]));
-  // }
+  for (size_t i = 0; i < temp.size(); i += 3) {
+    const_gyro_bias.push_back(Eigen::Vector3d(temp[i], temp[i+1], temp[i+2]));
+  }
 
   rclcpp::init(argc, argv);
   const std::string node_name = "boreas_localization_" + random_string(10);
@@ -561,9 +562,9 @@ int main(int argc, char **argv) {
     gyro_data_.push_back(readGyroToEigenXd(gyro_path, initial_timestamp_micro_, "aevaII_boreas"));
     gyro_data_.back().rightCols<3>() *= -1.0; // flip reference frame
 
-    // compute gyro bias while vehicle is stationary
-    const_gyro_bias.push_back(gyro_data_.back().topRightCorner(200, 3).colwise().mean().transpose());
-    std::cout << "Gyro bias: " << const_gyro_bias.back().transpose() << std::endl;
+    // // compute gyro bias while vehicle is stationary
+    // const_gyro_bias.push_back(gyro_data_.back().topRightCorner(200, 3).colwise().mean().transpose());
+    // std::cout << "Gyro bias: " << const_gyro_bias.back().transpose() << std::endl;
   } else {
     // load Aeries I boreas gyro
     gyro_data_.push_back(readGyroToEigenXd(gyro_path, initial_timestamp_micro_, "aevaI_boreas"));
@@ -575,9 +576,9 @@ int main(int argc, char **argv) {
   std::vector<Eigen::Matrix3d> gyro_invcov;
   gyro_invcov.resize(1);
   gyro_invcov[0] = Eigen::Matrix3d::Identity();
-  gyro_invcov[0](0,0) = 1.0/(cov_arr[0]);
-  gyro_invcov[0](1,1) = 1.0/(cov_arr[1]);
-  gyro_invcov[0](2,2) = 1.0/(cov_arr[2]);                   
+  gyro_invcov[0](0,0) = 2.0/(cov_arr[0]);
+  gyro_invcov[0](1,1) = 2.0/(cov_arr[1]);
+  gyro_invcov[0](2,2) = 2.0/(cov_arr[2]);                   
 
   auto tf_sbc = std::make_shared<tf2_ros::StaticTransformBroadcaster>(node);
   auto msg =
