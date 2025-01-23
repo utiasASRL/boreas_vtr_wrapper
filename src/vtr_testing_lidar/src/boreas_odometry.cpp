@@ -64,12 +64,17 @@ EdgeTransform load_T_robot_lidar(const fs::path &path) {
   Eigen::Matrix4d T_applanix_lidar_mat;
   for (size_t row = 0; row < 4; row++)
     for (size_t col = 0; col < 4; col++) ifs >> T_applanix_lidar_mat(row, col);
+  // Extrinsic from radar to rear axel
+  Eigen::Matrix4d T_axel_applanix;
+  // Want to estimate at rear axel, this transform has x forward, y right, z down
+  T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
+                    -0.99955003, 0.0299955, 0, 0.0,
+                    0, 0, 1, 1.45,
+                    0, 0, 0, 1;
 
-  Eigen::Matrix4d yfwd2xfwd;
-  yfwd2xfwd << 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1;
-
-  EdgeTransform T_robot_lidar(Eigen::Matrix4d(yfwd2xfwd * T_applanix_lidar_mat),
+  EdgeTransform T_robot_lidar(Eigen::Matrix4d(T_axel_applanix * T_applanix_lidar_mat),
                               Eigen::Matrix<double, 6, 6>::Zero());
+
 #else
   Eigen::Matrix4d T_robot_lidar_mat;
   // clang-format off
@@ -78,6 +83,7 @@ EdgeTransform load_T_robot_lidar(const fs::path &path) {
                        -0.73044281,  0.68297386,  0.        ,  0.        ,
                         0.        ,  0.        ,  1.        , -0.21      ,
                         0.        ,  0.        ,  0.        ,  1.        ;
+
   // clang-format on
   EdgeTransform T_robot_lidar(T_robot_lidar_mat,
                               Eigen::Matrix<double, 6, 6>::Zero());
