@@ -143,7 +143,7 @@ int main(int argc, char **argv) {
   std::vector<fs::directory_entry> files;
   const auto radar_dir_name = node->declare_parameter<std::string>("boreas.radar_dir_name", "radar");
   for (const auto &dir_entry : fs::directory_iterator{odo_dir / radar_dir_name})
-    if (!fs::is_directory(dir_entry)) files.push_back(dir_entry);
+    if (dir_entry.path().extension() == ".png") files.push_back(dir_entry);
   std::sort(files.begin(), files.end());
   CLOG(WARNING, "test") << "Found " << files.size() << " radar data";
 

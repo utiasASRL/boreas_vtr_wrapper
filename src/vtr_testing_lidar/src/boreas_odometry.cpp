@@ -177,7 +177,7 @@ int main(int argc, char **argv) {
   // List of lidar data
   std::vector<fs::directory_entry> files;
   for (const auto &dir_entry : fs::directory_iterator{odo_dir / "lidar"})
-    if (!fs::is_directory(dir_entry)) files.push_back(dir_entry);
+    if (dir_entry.path().extension() == ".bin") files.push_back(dir_entry);
   std::sort(files.begin(), files.end());
   CLOG(WARNING, "test") << "Found " << files.size() << " lidar data";
 
