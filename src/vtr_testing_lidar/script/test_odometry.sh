@@ -29,6 +29,9 @@ if [ -d $graph_dir ]; then
   fi
 fi
 
+# Copy over parameter file
+cp ${PARAM_FILE} ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}/lidar_odometry_config.yaml
+
 ros2 run vtr_testing_lidar vtr_testing_lidar_boreas_odometry \
   --ros-args -p use_sim_time:=true \
   -r __ns:=/vtr \
