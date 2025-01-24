@@ -31,7 +31,6 @@ int64_t getStampFromPath(const std::string &path) {
 }
 
 EdgeTransform load_T_robot_radar(const fs::path &path) {
-#if true
   std::ifstream ifs1(path / "calib" / "T_applanix_lidar.txt", std::ios::in);
   std::ifstream ifs2(path / "calib" / "T_radar_lidar.txt", std::ios::in);
 
@@ -54,13 +53,6 @@ EdgeTransform load_T_robot_radar(const fs::path &path) {
   EdgeTransform T_robot_radar(Eigen::Matrix4d(T_axel_applanix * T_applanix_lidar_mat *
                                               T_radar_lidar_mat.inverse()),
                               Eigen::Matrix<double, 6, 6>::Zero());
-
-#else
-  (void)path;
-  // robot frame == radar frame
-  EdgeTransform T_robot_radar(Eigen::Matrix4d(Eigen::Matrix4d::Identity()),
-                              Eigen::Matrix<double, 6, 6>::Zero());
-#endif
 
   return T_robot_radar;
 }
