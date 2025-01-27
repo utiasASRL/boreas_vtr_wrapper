@@ -83,7 +83,6 @@
         cart_resolution: 0.2384 # m/pixel of BEV Cartesian radar image
         radar_resolution: 0.04381 #0.0596
         cartesian_maxr: 80.0 # maximum cartesian visualization distance
-        # chirp_type:
       extraction:
         type: radar.pc_extractor
         radar_resolution: 0.0596

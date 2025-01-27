@@ -108,6 +108,7 @@
         visualize: true
 
     odometry:
+      start_frame: 0
       icp:
         type: lidar.odometry_icp
 
