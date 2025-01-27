@@ -241,7 +241,8 @@
         min_matched_ratio: 0.0 # 0.0 to disable
         max_trans_vel_diff: 1000.0 # 1000.0 (or some large number) to disable
         max_rot_vel_diff: 1000.0 # 1000.0 (or some large number) to disable
-        max_transformation_diff: 1000.0 # 1000.0 (or some large number) to disable
+        max_trans_diff: 1000.0 # 1000.0 (or some large number) to disable
+        max_rot_diff: 1000.0 # 1000.0 (or some large number) to disable
 
         visualize: true
 
