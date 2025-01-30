@@ -167,7 +167,7 @@ int main(int argc, char **argv) {
       ++it;
       ++frame;
       continue;
-    } else if (end_frame > 0 && frame >= end_frame) {
+    } else if (end_frame > 0 && frame > end_frame) {
       break;
     }
 

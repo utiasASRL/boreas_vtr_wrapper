@@ -253,6 +253,8 @@ int main(int argc, char **argv) {
     if (dir_entry.path().extension() == ".png") files.push_back(dir_entry);
   std::sort(files.begin(), files.end());
   CLOG(WARNING, "test") << "Found " << files.size() << " radar data";
+  const auto start_frame = node->declare_parameter<int>("localization.start_frame", 0);
+  const auto end_frame = node->declare_parameter<int>("localization.end_frame", -1);
 
   // thread handling variables
   TestControl test_control(node);
@@ -261,6 +263,10 @@ int main(int argc, char **argv) {
   int frame = 0;
   auto it = files.begin();
   while (it != files.end()) {
+    if (end_frame > 0 && frame > end_frame) {
+      break;
+    }
+
     if (!rclcpp::ok()) break;
     rclcpp::spin_some(node);
     if (test_control.terminate()) break;
