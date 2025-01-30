@@ -109,6 +109,7 @@
 
     odometry:
       start_frame: 0
+      end_frame: -1 # -1 means process all frames
       icp:
         type: lidar.odometry_icp
 
