@@ -264,7 +264,7 @@ int main(int argc, char **argv) {
   int frame = 0;
   auto it = files.begin();
   while (it != files.end()) {
-    if (end_frame > 0 && frame > end_frame) {
+    if (end_frame >= 0 && frame > end_frame) {
       break;
     }
 
