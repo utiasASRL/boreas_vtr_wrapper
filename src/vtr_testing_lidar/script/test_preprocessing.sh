@@ -17,6 +17,7 @@ echo "Running preprocessing on sequence ${ODO_INPUT}, storing result to ${VTRRRE
 source ${VTRRROOT}/install/setup.bash
 
 # Copy over parameter file
+mkdir -p ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}
 cp ${PARAM_FILE} ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}/lidar_preprocessing_config.yaml
 
 ros2 run vtr_testing_lidar vtr_testing_lidar_boreas_preprocessing \

@@ -30,6 +30,7 @@ if [ -d $graph_dir ]; then
 fi
 
 # Copy over parameter file
+mkdir -p ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}
 cp ${PARAM_FILE} ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}/lidar_odometry_config.yaml
 
 ros2 run vtr_testing_lidar vtr_testing_lidar_boreas_odometry \

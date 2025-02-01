@@ -14,6 +14,7 @@ fi
 echo "Running preprocessing on sequence ${ODO_INPUT}, storing result to ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}"
 
 # Copy over parameter file
+mkdir -p ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}
 cp ${PARAM_FILE} ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}/radar_preprocessing_config.yaml
 
 # Source the VTR environment with the testing package
