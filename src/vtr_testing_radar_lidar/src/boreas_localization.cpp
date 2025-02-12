@@ -345,6 +345,9 @@ int main(int argc, char **argv) {
     // fill in the vehicle to sensor transform and frame name
     query_data->radar::RadarQueryCache::T_s_r.emplace(T_radar_robot);
 
+    // Add sequence name to query data
+    query_data->seq_name = stem;
+
     // execute the pipeline
     tactic->input(query_data);
 
