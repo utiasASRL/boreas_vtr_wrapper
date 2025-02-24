@@ -5,6 +5,7 @@
 # Get arguments
 ODO_INPUT=$1
 TYPE=$2
+LOC_INPUT=$3
 
 # Log
 echo "Evaluating localization to reference sequence ${ODO_INPUT}, storing result to ${VTRRRESULT}/${ODO_INPUT}"
@@ -15,10 +16,14 @@ source ${VTRROOT}/venv/bin/activate
 
 #   - dump localization result to boreas expected format (txt file)
 if [ "$TYPE" = "aeva_boreas" ] || [ "$TYPE" = "aevaii_boreas" ]; then
-    python ${VTRRROOT}/src/vtr_testing_aeva/script/boreas_generate_localization_result.py --dataset ${VTRRDATA} --path ${VTRRRESULT}/${ODO_INPUT} --type ${TYPE}
+    python ${VTRRROOT}/src/vtr_testing_aeva/script/boreas_generate_localization_result.py --dataset ${VTRRDATA} --path ${VTRRRESULT}/${ODO_INPUT} --type ${TYPE} --input_loc_dir ${LOC_INPUT}
 elif [ "$TYPE" = "aeva_hq" ]; then
     python ${VTRRROOT}/src/vtr_testing_aeva/script/aevahq_generate_localization_result.py --dataset ${VTRRDATA} --path ${VTRRRESULT}/${ODO_INPUT}
 fi
 
 #   - evaluate the result using the evaluation script
-python -m pyboreas.eval.localization_aeva --gt ${VTRRDATA} --pred ${VTRRRESULT}/${ODO_INPUT}/localization_result --ref_seq ${ODO_INPUT} --data_type ${TYPE} --ref_sensor aeva --test_sensor aeva --dim 3  --plot ${VTRRRESULT}/${ODO_INPUT}/localization_result/lidar-lidar
+python -m pyboreas.eval.localization_aeva --gt ${VTRRDATA} --pred ${VTRRRESULT}/${ODO_INPUT}/localization_result --ref_seq ${ODO_INPUT} --data_type ${TYPE} --ref_sensor aeva --test_sensor aeva --dim 3  --plot ${VTRRRESULT}/${ODO_INPUT}/localization_result/lidar-lidar --loc_dir ${LOC_INPUT}
+
+# Copy all .log files to the new folder
+mkdir -p ${VTRRRESULT}/${ODO_INPUT}/localization_result/${LOC_INPUT}_logs
+cp ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}/*.log ${VTRRRESULT}/${ODO_INPUT}/localization_result/${LOC_INPUT}_logs/

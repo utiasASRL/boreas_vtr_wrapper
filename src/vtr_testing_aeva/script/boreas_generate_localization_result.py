@@ -51,10 +51,10 @@ class BagFileParser():
     return [(timestamp, deserialize_message(data, self.topic_msg_message[topic_name])) for timestamp, data in rows]
 
 
-def main(dataset_dir, result_dir, sensor_type):
+def main(dataset_dir, result_dir, sensor_type, input_loc_dir):
   result_dir = osp.normpath(result_dir)
   odo_input = osp.basename(result_dir)
-  loc_inputs = [i for i in os.listdir(result_dir) if (i != odo_input and i.startswith("20"))]
+  loc_inputs = [i for i in os.listdir(result_dir) if (i != odo_input and i.startswith("20") and i == input_loc_dir)]
   loc_inputs.sort()
   print("Result Directory:", result_dir)
   print("Odometry Run:", odo_input)
@@ -93,6 +93,12 @@ def main(dataset_dir, result_dir, sensor_type):
 
   for i, loc_input in enumerate(loc_inputs):
 
+    save_loc_input = loc_input
+    if '_threshold_' in loc_input:
+      loc_input = loc_input.split('_threshold_')[0]
+
+    print("Processing localization run:", loc_input)
+
     # dataset directory and necessary sequences to load
     dataset_loc = BoreasDataset(osp.normpath(dataset_dir), [[loc_input]])
 
@@ -111,7 +117,7 @@ def main(dataset_dir, result_dir, sensor_type):
 
     print("Loaded number of localization poses: ", len(ground_truth_poses_loc))
 
-    loc_dir = osp.join(result_dir, loc_input)
+    loc_dir = osp.join(result_dir, save_loc_input)
 
     data_dir = osp.join(loc_dir, "graph/data")
     if not osp.exists(data_dir):
@@ -160,12 +166,12 @@ def main(dataset_dir, result_dir, sensor_type):
 
     output_dir = osp.join(result_dir, "localization_result")
     os.makedirs(output_dir, exist_ok=True)
-    with open(osp.join(output_dir, loc_input + ".txt"), "+w") as file:
+    with open(osp.join(output_dir, save_loc_input + ".txt"), "+w") as file:
       writer = csv.writer(file, delimiter=' ')
       writer.writerows(result)
-      print("Written to file:", osp.join(output_dir, loc_input + ".txt"))
+      print("Written to file:", osp.join(output_dir, save_loc_input + ".txt"))
       
-  if False:
+  if True:
     bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "odometry_vel_result")
     parser = BagFileParser(bag_file)
     messages = parser.get_bag_messages("odometry_vel_result")
@@ -189,10 +195,10 @@ def main(dataset_dir, result_dir, sensor_type):
     
     output_dir = osp.join(result_dir, "localization_vel_result")
     os.makedirs(output_dir, exist_ok=True)
-    with open(osp.join(output_dir, loc_input + "_vel.txt"), "+w") as file:
+    with open(osp.join(output_dir, save_loc_input + "_vel.txt"), "+w") as file:
       writer = csv.writer(file, delimiter=' ')
       writer.writerows(vel_results)
-      print("Written to file:", osp.join(output_dir, loc_input + "_vel.txt"))
+      print("Written to file:", osp.join(output_dir, save_loc_input + "_vel.txt"))
 
 
 
@@ -206,7 +212,8 @@ if __name__ == "__main__":
   parser.add_argument('--dataset', default=os.getcwd(), type=str, help='path to boreas dataset (contains boreas-*)')
   parser.add_argument('--path', default=os.getcwd(), type=str, help='path to vtr folder (default: os.getcwd())')
   parser.add_argument('--type', default=os.getcwd(), type=str, help='dataset type (which sensor?)')
+  parser.add_argument('--input_loc_dir', default=os.getcwd(), type=str, help='input localization directory')
 
   args = parser.parse_args()
 
-  main(args.dataset, args.path, args.type)
+  main(args.dataset, args.path, args.type, args.input_loc_dir)

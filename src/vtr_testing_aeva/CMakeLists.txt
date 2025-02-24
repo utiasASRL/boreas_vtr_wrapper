@@ -28,20 +28,8 @@ include_directories(
 add_executable(${PROJECT_NAME}_aeva_preprocessing src/aeva_preprocessing.cpp)
 ament_target_dependencies(${PROJECT_NAME}_aeva_preprocessing rclcpp std_msgs vtr_common vtr_logging vtr_lidar vtr_torch)
 
-add_executable(${PROJECT_NAME}_aeva_odometry src/aeva_odometry.cpp)
-ament_target_dependencies(${PROJECT_NAME}_aeva_odometry rclcpp std_msgs vtr_common vtr_logging vtr_lidar vtr_torch)
-
-add_executable(${PROJECT_NAME}_aeva_hq_odometry src/aeva_hq_odometry.cpp)
-ament_target_dependencies(${PROJECT_NAME}_aeva_hq_odometry rclcpp std_msgs vtr_common vtr_logging vtr_lidar vtr_torch)
-
 add_executable(${PROJECT_NAME}_aeva_boreas_odometry src/aeva_boreas_odometry.cpp)
 ament_target_dependencies(${PROJECT_NAME}_aeva_boreas_odometry rclcpp std_msgs vtr_common vtr_logging vtr_lidar vtr_torch)
-
-add_executable(${PROJECT_NAME}_aeva_localization src/aeva_localization.cpp)
-ament_target_dependencies(${PROJECT_NAME}_aeva_localization rclcpp std_msgs vtr_common vtr_logging vtr_lidar vtr_torch)
-
-add_executable(${PROJECT_NAME}_aeva_hq_localization src/aeva_hq_localization.cpp)
-ament_target_dependencies(${PROJECT_NAME}_aeva_hq_localization rclcpp std_msgs vtr_common vtr_logging vtr_lidar vtr_torch)
 
 add_executable(${PROJECT_NAME}_aeva_boreas_localization src/aeva_boreas_localization.cpp)
 ament_target_dependencies(${PROJECT_NAME}_aeva_boreas_localization rclcpp std_msgs vtr_common vtr_logging vtr_lidar vtr_torch)
@@ -54,11 +42,7 @@ install(
 install(
   TARGETS
     ${PROJECT_NAME}_aeva_preprocessing
-    ${PROJECT_NAME}_aeva_odometry
-    ${PROJECT_NAME}_aeva_hq_odometry
     ${PROJECT_NAME}_aeva_boreas_odometry
-    ${PROJECT_NAME}_aeva_localization
-    ${PROJECT_NAME}_aeva_hq_localization
     ${PROJECT_NAME}_aeva_boreas_localization
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib

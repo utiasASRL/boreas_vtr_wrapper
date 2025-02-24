@@ -303,7 +303,7 @@ std::string getFirstFilename(const std::string& dir_path) {
     return first_filename;
 }
 
-Eigen::MatrixXd readGyroToEigenXd(const std::string &file_path, const int64_t& initial_timestamp_micro, const std::string& dataset) {
+Eigen::MatrixXd readGyroToEigenXd(const std::string &file_path, const int64_t& first_state_time_micro, const std::string& dataset) {
   // this function is specifically designed for 2 datasets: aeva_boreas and aeva_hq
   if (dataset != "aevaI_boreas" && dataset != "aevaII_boreas") 
     throw std::runtime_error{"[readGyroToEigenXd] unknown dataset specified!"};
@@ -327,7 +327,7 @@ Eigen::MatrixXd readGyroToEigenXd(const std::string &file_path, const int64_t& i
 
         if (i == 0) {
           timestamp = std::stol(value);
-          timestamp_sec = static_cast<double>(timestamp - initial_timestamp_micro)*1e-6;
+          timestamp_sec = static_cast<double>(timestamp - first_state_time_micro)*1e-6;
         } else if (dataset == "aevaI_boreas") {  // Note: r and p are flipped for aeva_boreas
           if (i == 2) 
             r = std::stod(value);
@@ -372,11 +372,37 @@ int main(int argc, char **argv) {
   int init_frame = 0;
   int last_frame = 100000;
   bool aeriesII = config["/**"]["ros__parameters"]["aeriesII"].as<bool>();
-  std::vector<double> temp = config["/**"]["ros__parameters"]["preprocessing"]["doppler_filtering"]["const_gyro_bias"].as<std::vector<double>>();
+
+  std::string sensor_config_path = config["/**"]["ros__parameters"]["preprocessing"]["doppler_filtering"]["root_path"].as<std::string>();
+  std::string model_name = config["/**"]["ros__parameters"]["preprocessing"]["doppler_filtering"]["model_name"].as<std::string>();
+
+  // Load const_gyro_bias from gyro_bias.txt
+  std::string gyro_bias_path = sensor_config_path + "/" + model_name + "/gyro_bias.txt";
+  std::ifstream bi_csv(gyro_bias_path);
+  Eigen::MatrixXd gbias_matrix = readCSVtoEigenXd(bi_csv);
+  std::vector<double> gbias(gbias_matrix.data(), gbias_matrix.data() + gbias_matrix.size());
   std::vector<Eigen::Vector3d> const_gyro_bias;
-  for (size_t i = 0; i < temp.size(); i += 3) {
-    const_gyro_bias.push_back(Eigen::Vector3d(temp[i], temp[i+1], temp[i+2]));
+  for (int i = 0; i < gbias.size(); i += 3) {
+    const_gyro_bias.push_back(Eigen::Vector3d(gbias[i], gbias[i+1], gbias[i+2]));
   }
+
+  std::string gyro_cov_path = sensor_config_path + "/" + model_name + "/gyro_cov.txt";
+  std::ifstream co_csv(gyro_cov_path);
+  std::vector<double> cov_arr;
+  if (co_csv.is_open()) {
+    std::string line;
+    std::getline(co_csv, line);
+    std::stringstream ss(line);
+    std::string value;
+    while (std::getline(ss, value, ',')) {
+      cov_arr.push_back(std::stod(value));
+    }
+  } else {
+    throw std::runtime_error("Unable to open gyro_cov file: " + gyro_cov_path);
+  }
+
+  std::cout << "const_gyro_bias: " << const_gyro_bias << std::endl;
+  std::cout << "cov_arr: " << cov_arr << std::endl;
 
   rclcpp::init(argc, argv);
   const std::string node_name = "boreas_odometry_" + random_string(10);
@@ -447,7 +473,7 @@ int main(int argc, char **argv) {
 
   std::string dir_path_ = odo_dir.string() + "/aeva/";
   std::vector<std::string> filenames_;
-  int64_t initial_timestamp_micro_;
+  int64_t first_state_time_micro_;
   int init_frame_ = 0;
   int curr_frame_ = 0;
   int last_frame_ = std::numeric_limits<int>::max();  // exclusive bound
@@ -463,7 +489,7 @@ int main(int argc, char **argv) {
   curr_frame_ = std::max((int)0, init_frame);
   init_frame_ = std::max((int)0, init_frame);
 
-  initial_timestamp_micro_ = std::stoll(filenames_[0].substr(0, filenames_[0].find(".")));
+  first_state_time_micro_ = std::stoll(filenames_[0].substr(0, filenames_[0].find(".")));
 
   // Gyroscope data
   // initialize gyro
@@ -472,31 +498,17 @@ int main(int argc, char **argv) {
   std::string gyro_path = odo_dir.string() + "/applanix/" + "aeva_imu.csv";
   if (aeriesII) {
     // load Aeries II boreas gyro
-    gyro_data_.push_back(readGyroToEigenXd(gyro_path, initial_timestamp_micro_, "aevaII_boreas"));
+    gyro_data_.push_back(readGyroToEigenXd(gyro_path, first_state_time_micro_, "aevaII_boreas"));
     gyro_data_.back().rightCols<3>() *= -1.0; // flip reference frame
-
-    // // compute gyro bias while vehicle is stationary
-    // const_gyro_bias.push_back(gyro_data_.back().topRightCorner(100, 3).colwise().mean().transpose());
-    // std::cout << "Gyro bias: " << const_gyro_bias.back() << std::endl;
-
   } else {
     // load Aeries I boreas gyro
-    gyro_data_.push_back(readGyroToEigenXd(gyro_path, initial_timestamp_micro_, "aevaI_boreas"));
+    gyro_data_.push_back(readGyroToEigenXd(gyro_path, first_state_time_micro_, "aevaI_boreas"));
   }
 
-  CLOG(WARNING, "test") << "Loaded gyro data " << ". Matrix " 
-      << gyro_data_.back().rows() << " x " << gyro_data_.back().cols() << std::endl;
-
-  // define cov_array and assign each value to the corresponding value in gyro_invcov
-  // to do: move this to config
-  std::vector<double>cov_arr = {1.09504535e-04, 1.73659780e-04, 5.01201833e-05};
-
-  std::vector<Eigen::Matrix3d> gyro_invcov;
-  gyro_invcov.resize(1);
-  gyro_invcov[0] = Eigen::Matrix3d::Identity();
-  gyro_invcov[0](0,0) = 2.0/(cov_arr[0]);
-  gyro_invcov[0](1,1) = 2.0/(cov_arr[1]);
-  gyro_invcov[0](2,2) = 2.0/(cov_arr[2]);  
+  Eigen::Matrix3d gyro_invcov = Eigen::Matrix3d::Identity();
+  gyro_invcov(0,0) = 2.0/(cov_arr[0]);
+  gyro_invcov(1,1) = 2.0/(cov_arr[1]);
+  gyro_invcov(2,2) = 2.0/(cov_arr[2]);
 
   auto tf_sbc = std::make_shared<tf2_ros::StaticTransformBroadcaster>(node);
   auto msg =
@@ -531,7 +543,7 @@ int main(int argc, char **argv) {
 
     std::cout << "Frame " << frame << std::endl;
     const auto filename = getStampFromPath((it)->path().string());
-    int64_t time_delta_micro = filename / 1000 - initial_timestamp_micro_;
+    int64_t time_delta_micro = filename / 1000 - first_state_time_micro_;
     double start_time = static_cast<double>(time_delta_micro) / 1e6;
 
     // Note: we peak into future data for the end timestamp for evaluation convenience. An online implementation
@@ -541,46 +553,48 @@ int main(int argc, char **argv) {
     int64_t next_file_name;
     if ((it + 1) != files.end()) {
       next_file_name = getStampFromPath((it + 1)->path().string());
-      auto end_time = static_cast<double>(next_file_name - initial_timestamp_micro_) / 1e6;
+      auto end_time = static_cast<double>(next_file_name - first_state_time_micro_) / 1e6;
     }
     int64_t start_name = filename;
     
     double dt = 0;
     Eigen::MatrixXd points;
     if (aeriesII) {
+      // load Aeries II boreas pointcloud
       std::tie(std::ignore, points) = load_new_lidar(it->path().string(), start_time, end_time, start_name);
     } else {
       dt = 0.1; // aeries I gyro time sync ~0.1s off
-      // Beam Order Path
-      std::string bo_path = config["/**"]["ros__parameters"]["bo_path"].as<std::string>() + "/mean_elevation_beam_order_0";
       // load Aeries I boreas pointcloud
-      std::tie(std::ignore, points) = load_lidar(it->path().string(), bo_path, start_time, end_time, start_name);
+      auto [fields, points] = load_lidar(it->path().string(), sensor_config_path, start_time, end_time, start_name);
+    }
+
+    if (points.rows() == 0) {
+      CLOG(WARNING, "test") << "No points found in frame " << frame;
+      ++it;
+      ++frame;
+      continue;
     }
 
     // load gyro data
-    std::vector<Eigen::MatrixXd> current_gyro;
-    for (int sensorid = 0; sensorid < gyro_data_.size(); ++sensorid) {
-      std::vector<int> inds; inds.clear();
-      for (int r = 0; r < gyro_data_[sensorid].rows(); ++r) {
-        double meas_time = gyro_data_[sensorid](r, 0) - dt;
-        if (meas_time >= start_time && meas_time < end_time) 
-          inds.push_back(r);
-      } // end for r
+    Eigen::MatrixXd current_gyro;
+    std::vector<int> inds;
+    for (int r = 0; r < gyro_data_[0].rows(); ++r) {
+      double meas_time = gyro_data_[0](r, 0) - dt;
+      if (meas_time >= start_time && meas_time < end_time)
+        inds.push_back(r);
+    } // end for r
 
-      if (inds.size() == 0) {
-        // no measurements
-        current_gyro.push_back(Eigen::Matrix<double, 1, 1>());  // 1x1 zero matrix
-        continue;
+    if (inds.size() == 0) {
+      // no measurements
+      current_gyro = Eigen::Matrix<double, 1, 1>();  // 1x1 zero matrix
+    } else {
+      current_gyro.resize(inds.size(), 4);
+      for (int r = 0; r < inds.size(); ++r) {
+        current_gyro(r, 0) = gyro_data_[0](inds[r], 0) - dt; // timestamp
+        current_gyro.row(r).rightCols<3>() = gyro_data_[0].row(inds[r]).rightCols<3>();
+        current_gyro.row(r).rightCols<3>() -= const_gyro_bias[0].transpose();  // apply gyro bias
       }
-
-        Eigen::MatrixXd temp_gyro(inds.size(), 4);
-        for (int r = 0; r < inds.size(); ++r) {
-          temp_gyro(r, 0) = gyro_data_[sensorid](inds[r], 0) - dt; // timestamp
-          temp_gyro.row(r).rightCols<3>() = gyro_data_[sensorid].row(inds[r]).rightCols<3>();
-          temp_gyro.row(r).rightCols<3>() -= const_gyro_bias[0].transpose();  // apply gyro bias
-      }
-      current_gyro.push_back(temp_gyro);
-    } // end for sensorid
+    }
 
     // publish clock for sim time
     auto time_msg = rosgraph_msgs::msg::Clock();
@@ -610,10 +624,9 @@ int main(int argc, char **argv) {
     // set gyro data
     query_data->gyro.emplace(current_gyro);
     query_data->gyro_invcov.emplace(gyro_invcov);
-    query_data->const_gyro_bias.emplace(const_gyro_bias);
 
     // set timestamp of first frame [us]
-    query_data->initial_timestamp.emplace(initial_timestamp_micro_);
+    query_data->first_state_time.emplace(first_state_time_micro_);
 
     // set timestamp of next state [ns]
     query_data->next_state_time.emplace(next_file_name);

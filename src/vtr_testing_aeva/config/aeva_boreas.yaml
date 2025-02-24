@@ -18,7 +18,8 @@
         # "lidar.aeva_converter",
         # "lidar.preprocessing",
         # "lidar.preprocessing_doppler",
-        # "lidar.odometry_icp",
+        "lidar.odometry_preintegration",
+        "lidar.odometry_icp",
         # "lidar.odometry_doppler",
         # "lidar.odometry_map_maintenance",
         # "lidar.vertex_test",
@@ -27,7 +28,6 @@
       ]
     
     aeriesII: true
-    bo_path: "/home/asrl-katya/ASRL/doppler_odom/sensor_config/boreas"
 
     ############ tactic configuration ############
     tactic:
@@ -47,13 +47,15 @@
         distance_warning: 30.0
 
       save_odometry_result: true
-      save_odometry_vel_result: false
+      save_odometry_vel_result: true
       save_localization_result: true
       visualize: false
 
       # localization interval threshold
-      use_loc_threshold: false
-      loc_threshold: 1 # num frames
+      # TO DO FIX THIS -- should auto check if running doppler
+      # FOR DOPPLER 1 --- SET LOC TRUE AND LOC THRESHOLD TO 1
+      use_loc_flag: false  
+      loc_threshold: 1   # num frames
 
       rviz_loc_path_offset: [0., 0., 0.]
 
@@ -65,13 +67,14 @@
           # preprocessing thread modules
           "conversion",
           "filtering",
-          "doppler_filtering",
+          # "doppler_filtering",
         ]
 
       odometry: [
           # odometry and mapping thread modules
-          # "icp",
-          "doppler", 
+          "preintegration",
+          "icp",
+          # "doppler", 
           "mapping",
           "vertex_test",
           "memory",
@@ -98,14 +101,14 @@
         type: lidar.preprocessing
         num_threads: 10
 
-        crop_range: 150.0
+        crop_range: 100.0
         # 
-        vertical_angle_res: 0.007561638984 # vertical angle resolution in radians (0.12 deg w/ 30 vertical FOV)
+        vertical_angle_res: 0.00349066 # vertical angle resolution in radians (0.12 deg w/ 30 vertical FOV)
         polar_r_scale: 2.0 # 1.0 # polar_r_scale x vertical_angle_res = nearest neighbor search radius for normal computation
         r_scale: 4.0 # scale down point range by this value after taking log, whatever works
-        h_scale: 4.0 # scale down yaw(phi) by this value so that vertical resolution ~= horizontal resolution
+        h_scale: 0.25 # scale down yaw(phi) by this value so that vertical resolution ~= horizontal resolution
         #
-        frame_voxel_size: 0.5 # grid subsampling voxel size
+        frame_voxel_size: 1.0 # grid subsampling voxel size
         filter_normal: true
         #
         num_sample1: 5000 # max number of sample after filtering based on planarity
@@ -116,13 +119,14 @@
         min_normal_estimate_dist: 2.0 # minimum distance to estimate normal in meters
         max_normal_estimate_angle: 0.42 # must <1/2, this value will be timed by M_PI
         #
-        cluster_num_sample: 5000 # maxnumber of sample after removing isolated points
+        cluster_num_sample: 5000 # max number of sample after removing isolated points
+        min_points_threshold: 0 # min number of points to be considered as valid scan, set to 0 to disable
 
         visualize: false
 
       doppler_filtering:
         type: lidar.preprocessing_doppler
-        num_threads: 10
+        num_threads: 1
 
         # # aeriesI
         # azimuth_res: 0.00349066         # vertical angle resolution in radians
@@ -133,6 +137,7 @@
         # min_dist: 20                    # meters
         # max_dist: 150                   # meters
         # const_gyro_bias: [-0.00424229788086775, -0.01544970808768110, 0.00284478234035327]
+        # root_path: "/home/katya/Documents/Data/sensor_config/boreas_aeries_i"   # point this to where we find the trained sensor model
         # model_name: "mar8_boreas_lrvar_bp4-rim_vp3-imv-g_r5-150-e5_a0p1_aplat"
 
         # aeriesII
@@ -141,15 +146,14 @@
         azimuth_end: 1.09956            #  63 deg in rad
         num_rows: 64                    # num of vertical scan lines
         num_cols: 601                   # 120 deg FOV, 0.2 deg resolution
-        min_dist: 20                    # meters
-        max_dist: 150                   # meters
-        const_gyro_bias: [0.008635376340014623, 0.01223362178905661, 0.006690176486531614]
-        model_name: "aeriesii"
+        min_dist: 20.0                   # meters
+        max_dist: 80.0                  # meters
+        root_path: "/home/katya/Documents/Data/sensor_config/boreas_aeries_ii"  # point this to where we find the trained sensor model
+        model_name: "glen"
 
         # common to I and II
         active_lidars: [true]                                                 # only one sensor
         active_gyros: [true]  
-        root_path: "/home/asrl-katya/ASRL/doppler_odom/sensor_config/boreas"  # point this to where we find the trained sensor model
         downsample_steps: 2                                                   # after image projection 
         bias_input_feat: ["range", "intensity", "medianrv"]
         var_input_feat: ["intensity", "medianrv", "rv_var5"]
@@ -160,16 +164,23 @@
         visualize: false
 
     odometry:
+      preintegration:
+        type: lidar.odometry_preintegration
+
+        gyro_noise: [0.07,0.07,0.07]
+        # gyro_noise: [1.0,1.0,1.0]
+
       icp:
         type: lidar.odometry_icp
 
         # continuous time estimation
         use_trajectory_estimation: true
         traj_num_extra_states: 0
-        traj_lock_prev_pose: true
+        traj_lock_prev_pose: false
         traj_lock_prev_vel: false
         # traj_qc_diag: [50.0, 50.0, 50.0, 5.0, 5.0, 5.0]
-        traj_qc_diag: [1.0, 0.0001, 0.0001, 0.0001, 0.0001, 0.01] # good
+        # traj_qc_diag: [1.0, 0.0001, 0.0001, 0.0001, 0.0001, 0.01] # good
+        traj_qc_diag: [1.0, 0.0001, 0.0001, 0.01, 0.01, 0.01] # good
 
         use_radial_velocity: false
         rv_cov: 1.0
@@ -184,7 +195,7 @@
         initial_max_iter: 6
         initial_max_pairing_dist: 3.0
         initial_max_planar_dist: 1.0
-        refined_max_iter: 50
+        refined_max_iter: 60
         refined_max_pairing_dist: 1.0
         refined_max_planar_dist: 0.3
         averaging_num_steps: 3
@@ -192,8 +203,12 @@
         verbose: false
         max_iterations: 1
 
-        # threshold
+        # thresholds
         min_matched_ratio: 0.0
+        max_trans_vel_diff: 1.0    # m/s
+        max_rot_vel_diff: 1000.0    # m/s
+        max_trans_diff: 1000.0      # m
+        max_rot_diff: 1000.0        # rad
 
         visualize: false
 
@@ -207,26 +222,31 @@
         traj_qc_diag: [1.0, 0.001, 0.001, 0.001, 0.001, 1.0]
 
         # doppler odom parameters
-        num_threads: 10
-        num_sensors: 1
+        num_threads: 1
         ransac_seed: 0
         ransac_gyro: false
-        ransac_max_iter: 40
-        ransac_thres: 0.4
-        ransac_min_range: 5.0
+        ransac_max_iter: 100
+        ransac_threshold: 0.2
+        prior_threshold: 3.0      # m/s
+        ransac_min_range: 8.0      # m
         integration_steps: 100
         zero_vel_tol: 0.03
         #
         P0inv: [1e4, 1e4, 1e4, 1e6, 1e6, 1e6]
         Qkinv: [124.097194, 852.430330017, 448.704299478, 1128.19639192, 1230.02908934, 11316.9459369]
         Qzinv: [0.0, 100.0, 100.0, 33271.2755284, 20032.1558168, 0.0]
+        #
+        max_trans_vel_diff: 1.0    # m/s
+        max_rot_vel_diff: 1000.0    # m/s
+        max_trans_diff: 1000.0      # m
+        max_rot_diff: 1000.0        # rad
 
       mapping:
         type: lidar.odometry_map_maintenance_v2
 
         map_voxel_size: 0.3
 
-        crop_range_front: 60.0
+        crop_range_front: 100.0
         back_over_front_ratio: 1.0
 
         point_life_time: 10.0
@@ -255,7 +275,7 @@
       icp:
         type: lidar.localization_icp
 
-        use_pose_prior: false
+        use_pose_prior: true
 
         # ICP parameters
         num_threads: 10
@@ -263,7 +283,7 @@
         initial_max_iter: 6
         initial_max_pairing_dist: 5.0
         initial_max_planar_dist: 1.0
-        refined_max_iter: 50
+        refined_max_iter: 40
         refined_max_pairing_dist: 1.0
         refined_max_planar_dist: 0.3
         averaging_num_steps: 3
