@@ -342,25 +342,25 @@ Eigen::MatrixXd readGyroToEigenXd(const std::string &file_path, const int64_t& f
           else if (i == 3)
             y = std::stod(value);
         }
-            } // end for row
-            row_vec[0] = static_cast<int64_t>(timestamp);
-            row_vec[1] = timestamp_sec;
-            row_vec[2] = r;
-            row_vec[3] = p;
-            row_vec[4] = y;
-            mat_vec.push_back(row_vec);
-          } // end for line
-        } // end if
-        else {
-          throw std::runtime_error{"unable to open file: " + file_path};
-        }
+      } // end for row
+      row_vec[0] = static_cast<int64_t>(timestamp);
+      row_vec[1] = timestamp_sec;
+      row_vec[2] = r;
+      row_vec[3] = p;
+      row_vec[4] = y;
+      mat_vec.push_back(row_vec);
+    } // end for line
+  } // end if
+  else {
+    throw std::runtime_error{"unable to open file: " + file_path};
+  }
 
-        // output eigen matrix
-        Eigen::MatrixXd output = Eigen::MatrixXd(mat_vec.size(), mat_vec[0].size());
-        for (int i = 0; i < (int)mat_vec.size(); ++i) output.row(i) = Eigen::VectorXd::Map(&mat_vec[i][0], mat_vec[i].size());
+  // output eigen matrix
+  Eigen::MatrixXd output = Eigen::MatrixXd(mat_vec.size(), mat_vec[0].size());
+  for (int i = 0; i < (int)mat_vec.size(); ++i) output.row(i) = Eigen::VectorXd::Map(&mat_vec[i][0], mat_vec[i].size());
 
-        return output;
-      }
+  return output;
+}
 
 Eigen::Matrix3d toRoll(const double &r) {
   Eigen::Matrix3d roll;
@@ -412,7 +412,6 @@ int main(int argc, char **argv) {
   // disable eigen multi-threading
   Eigen::setNbThreads(1);
 
-  // TO DO: combine with aeva_boreas.yaml! don't want 2 configs
   std::string yaml_file_path = "external/boreas_vtr_wrapper/src/vtr_testing_aeva/config/aeva_boreas.yaml";
   YAML::Node config = loadYamlFile(yaml_file_path);
 
@@ -711,7 +710,6 @@ int main(int argc, char **argv) {
 
       current_gyro = Eigen::MatrixXd();
       gyro_timestamps = std::vector<int64_t>();
-      // throw std::runtime_error("Mismatch between current gyro data size and gyro timestamps size");
     }
 
     // publish clock for sim time
@@ -739,8 +737,6 @@ int main(int argc, char **argv) {
     // fill in the vehicle to sensor transform and frame name
     query_data->T_s_r.emplace(T_lidar_robot);
     query_data->T_s_r_gyro.emplace(T_imu_lidar_mat * T_lidar_robot);
-
-    CLOG(WARNING, "test") << "T_imu_lidar_mat: " << T_imu_lidar_mat * T_lidar_robot;
 
     // set gyro data
     query_data->gyro.emplace(prev_gyro);

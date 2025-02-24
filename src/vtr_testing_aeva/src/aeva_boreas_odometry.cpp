@@ -192,7 +192,8 @@ std::pair<int64_t, Eigen::MatrixXd> load_new_lidar(const std::string &path, doub
   std::ifstream ifs(path, std::ios::binary);
   std::vector<char> buffer(std::istreambuf_iterator<char>(ifs), {});
   unsigned float_offset = 4; // float32
-  unsigned fields = 10;  // x, y, z, radial velocity, intensity, signal quality, reflectivity, time, point flags (64)
+  // 9 point cloud fields, use 10 because point_flags is 64 bits
+  unsigned fields = 10;  // x, y, z, radial velocity, intensity, signal quality, reflectivity, time, point_flags (beam_id, line_id, face_id)
   unsigned point_step = float_offset * fields;
   unsigned N = floor(buffer.size() / point_step);
 
@@ -232,17 +233,17 @@ std::pair<int64_t, Eigen::MatrixXd> load_new_lidar(const std::string &path, doub
     ++offset;
     // Timestamp
     time_temp = (int64_t)(getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset)); // nanosec
-    double t = double(filename); // nanosec
+    double t = double(filename);
     time_keep = (int64_t)(time_temp + t);
-    time_temp = time_temp * 1e-9 + start_time; //sec
+    time_temp = time_temp * 1e-9 + start_time;
     ++offset;
-    // Point Flags (64 bits)
+    // Point Flags (64 bit flag, only need first 32 bits)
     point_flags = int(getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset));
 
     // Extract flags
     line_id = ((point_flags >> 8) & 0xFF);
-    beam_id = (point_flags >> 16) & 0xF;
-    face_id = (point_flags >> 22) & 0xF;
+    beam_id = ((point_flags >> 16) & 0xF);
+    face_id = ((point_flags >> 22) & 0xF);
 
     // Error checks
     if (line_id < 0 || line_id >= 64) continue;
@@ -313,7 +314,7 @@ Eigen::MatrixXd readGyroToEigenXd(const std::string &file_path, const int64_t& f
   if (imu_file.is_open()) {
     std::string line;
     std::getline(imu_file, line);  // header
-    std::vector<double> row_vec(4);
+    std::vector<double> row_vec(5);
     for (; std::getline(imu_file, line);) {
       if (line.empty()) continue;
       std::stringstream ss(line);
@@ -344,10 +345,11 @@ Eigen::MatrixXd readGyroToEigenXd(const std::string &file_path, const int64_t& f
             y = std::stod(value);
         }
       } // end for row
-      row_vec[0] = timestamp_sec;
-      row_vec[1] = r;
-      row_vec[2] = p;
-      row_vec[3] = y;
+      row_vec[0] = static_cast<int64_t>(timestamp);
+      row_vec[1] = timestamp_sec;
+      row_vec[2] = r;
+      row_vec[3] = p;
+      row_vec[4] = y;
       mat_vec.push_back(row_vec);
     } // end for line
   } // end if
@@ -358,6 +360,7 @@ Eigen::MatrixXd readGyroToEigenXd(const std::string &file_path, const int64_t& f
   // output eigen matrix
   Eigen::MatrixXd output = Eigen::MatrixXd(mat_vec.size(), mat_vec[0].size());
   for (int i = 0; i < (int)mat_vec.size(); ++i) output.row(i) = Eigen::VectorXd::Map(&mat_vec[i][0], mat_vec[i].size());
+
   return output;
 }
 
@@ -401,8 +404,22 @@ int main(int argc, char **argv) {
     throw std::runtime_error("Unable to open gyro_cov file: " + gyro_cov_path);
   }
 
+  // // use root path to config files, otherwise use this
+  // std::vector<Eigen::Vector3d> const_gyro_bias;
+  // const_gyro_bias.push_back(Eigen::Vector3d(0.008635376340014623,0.01223362178905661,0.006690176486531614));
+  // std::vector<double> cov_arr;
+  // cov_arr.push_back(1.09504535e-04);
+  // cov_arr.push_back(1.73659780e-04);
+  // cov_arr.push_back(5.01201833e-05);
+
   std::cout << "const_gyro_bias: " << const_gyro_bias << std::endl;
   std::cout << "cov_arr: " << cov_arr << std::endl;
+
+  Eigen::Matrix4d T_imu_lidar_mat;
+  T_imu_lidar_mat << 1.0, 0.0, 0.0, -0.020,
+                     0.0, 1.0, 0.0, -0.023,
+                     0.0, 0.0, 1.0, 0.037,
+                     0.0, 0.0, 0.0, 1.0;
 
   rclcpp::init(argc, argv);
   const std::string node_name = "boreas_odometry_" + random_string(10);
@@ -493,16 +510,16 @@ int main(int argc, char **argv) {
 
   // Gyroscope data
   // initialize gyro
-  std::vector<Eigen::MatrixXd> gyro_data_;
-  gyro_data_.clear();
+  Eigen::MatrixXd gyro_data_;
+  std::vector<int64_t> gyro_stamps;
   std::string gyro_path = odo_dir.string() + "/applanix/" + "aeva_imu.csv";
   if (aeriesII) {
     // load Aeries II boreas gyro
-    gyro_data_.push_back(readGyroToEigenXd(gyro_path, first_state_time_micro_, "aevaII_boreas"));
-    gyro_data_.back().rightCols<3>() *= -1.0; // flip reference frame
+    gyro_data_ = readGyroToEigenXd(gyro_path, first_state_time_micro_, "aevaII_boreas");
+    // gyro_data_.rightCols<3>() *= -1.0; // flip reference frame
   } else {
     // load Aeries I boreas gyro
-    gyro_data_.push_back(readGyroToEigenXd(gyro_path, first_state_time_micro_, "aevaI_boreas"));
+    gyro_data_ = readGyroToEigenXd(gyro_path, first_state_time_micro_, "aevaI_boreas");
   }
 
   Eigen::Matrix3d gyro_invcov = Eigen::Matrix3d::Identity();
@@ -530,6 +547,10 @@ int main(int argc, char **argv) {
   // thread handling variables
   TestControl test_control(node);
 
+  // Store current gyro and gyro timestamps for the next loop
+  static Eigen::MatrixXd prev_gyro = Eigen::MatrixXd();
+  static std::vector<int64_t> prev_gyro_timestamps = std::vector<int64_t>();
+
   // main loop
   int frame = 0;
   auto it = files.begin();
@@ -541,10 +562,11 @@ int main(int argc, char **argv) {
     std::this_thread::sleep_for(
         std::chrono::milliseconds(test_control.delay()));
 
-    std::cout << "Frame " << frame << std::endl;
     const auto filename = getStampFromPath((it)->path().string());
     int64_t time_delta_micro = filename / 1000 - first_state_time_micro_;
     double start_time = static_cast<double>(time_delta_micro) / 1e6;
+
+    std::cout << "Frame " << frame << " with timestamp " << filename << std::endl;
 
     // Note: we peak into future data for the end timestamp for evaluation convenience. An online implementation
     // would need different logic, i.e., use the last timestamp of the pointcloud
@@ -577,9 +599,10 @@ int main(int argc, char **argv) {
 
     // load gyro data
     Eigen::MatrixXd current_gyro;
+    std::vector<int64_t> gyro_timestamps;
     std::vector<int> inds;
-    for (int r = 0; r < gyro_data_[0].rows(); ++r) {
-      double meas_time = gyro_data_[0](r, 0) - dt;
+    for (int r = 0; r < gyro_data_.rows(); ++r) {
+      double meas_time = gyro_data_(r, 1) - dt;
       if (meas_time >= start_time && meas_time < end_time)
         inds.push_back(r);
     } // end for r
@@ -590,10 +613,19 @@ int main(int argc, char **argv) {
     } else {
       current_gyro.resize(inds.size(), 4);
       for (int r = 0; r < inds.size(); ++r) {
-        current_gyro(r, 0) = gyro_data_[0](inds[r], 0) - dt; // timestamp
-        current_gyro.row(r).rightCols<3>() = gyro_data_[0].row(inds[r]).rightCols<3>();
-        current_gyro.row(r).rightCols<3>() -= const_gyro_bias[0].transpose();  // apply gyro bias
+        gyro_timestamps.push_back(gyro_data_(inds[r], 0) * 1000);
+        current_gyro(r, 0) = gyro_data_(inds[r], 1) - dt; // timestamp
+        current_gyro.row(r).rightCols<3>() = gyro_data_.row(inds[r]).rightCols<3>();
+        current_gyro.row(r).rightCols<3>() += const_gyro_bias[0].transpose();  // apply gyro bias
       }
+    }
+  
+    // Check that current gyro and gyro_timestamps are the same size
+    if (current_gyro.rows() != gyro_timestamps.size()) {
+      CLOG(WARNING, "test") << "current_gyro size: " << current_gyro.rows() << " gyro_timestamps size: " << gyro_timestamps.size();
+
+      current_gyro = Eigen::MatrixXd();
+      gyro_timestamps = std::vector<int64_t>();
     }
 
     // publish clock for sim time
@@ -620,10 +652,16 @@ int main(int argc, char **argv) {
 
     // fill in the vehicle to sensor transform and frame name
     query_data->T_s_r.emplace(T_lidar_robot);
+    query_data->T_s_r_gyro.emplace(T_imu_lidar_mat * T_lidar_robot);
 
     // set gyro data
-    query_data->gyro.emplace(current_gyro);
+    query_data->gyro.emplace(prev_gyro);
+    query_data->gyro_stamp.emplace(prev_gyro_timestamps);
     query_data->gyro_invcov.emplace(gyro_invcov);
+
+    // Update previous gyro data and timestamps
+    prev_gyro = current_gyro;
+    prev_gyro_timestamps = gyro_timestamps;;
 
     // set timestamp of first frame [us]
     query_data->first_state_time.emplace(first_state_time_micro_);
