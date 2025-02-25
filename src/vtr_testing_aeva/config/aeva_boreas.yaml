@@ -164,11 +164,13 @@
         visualize: false
 
     odometry:
+      start_frame: 0 
+      end_frame: -1 # -1 means process all frames
       preintegration:
         type: lidar.odometry_preintegration
 
         gyro_noise: [0.07,0.07,0.07]
-        # gyro_noise: [1.0,1.0,1.0]
+        #gyro_noise: [1.0,1.0,1.0]
 
       icp:
         type: lidar.odometry_icp
@@ -176,7 +178,7 @@
         # continuous time estimation
         use_trajectory_estimation: true
         traj_num_extra_states: 0
-        traj_lock_prev_pose: false
+        traj_lock_prev_pose: true
         traj_lock_prev_vel: false
         # traj_qc_diag: [50.0, 50.0, 50.0, 5.0, 5.0, 5.0]
         # traj_qc_diag: [1.0, 0.0001, 0.0001, 0.0001, 0.0001, 0.01] # good

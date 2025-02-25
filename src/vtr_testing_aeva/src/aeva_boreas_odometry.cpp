@@ -368,8 +368,12 @@ int main(int argc, char **argv) {
   // disable eigen multi-threading
   Eigen::setNbThreads(1);
 
+  std::cout << "Starting Aeva odometry" << std::endl;
+
   std::string yaml_file_path = "external/boreas_vtr_wrapper/src/vtr_testing_aeva/config/aeva_boreas.yaml";
   YAML::Node config = loadYamlFile(yaml_file_path);
+
+  std::cout << "Loaded config file: " << yaml_file_path << std::endl;
 
   // load options
   int init_frame = 0;
@@ -403,17 +407,6 @@ int main(int argc, char **argv) {
   } else {
     throw std::runtime_error("Unable to open gyro_cov file: " + gyro_cov_path);
   }
-
-  // // use root path to config files, otherwise use this
-  // std::vector<Eigen::Vector3d> const_gyro_bias;
-  // const_gyro_bias.push_back(Eigen::Vector3d(0.008635376340014623,0.01223362178905661,0.006690176486531614));
-  // std::vector<double> cov_arr;
-  // cov_arr.push_back(1.09504535e-04);
-  // cov_arr.push_back(1.73659780e-04);
-  // cov_arr.push_back(5.01201833e-05);
-
-  std::cout << "const_gyro_bias: " << const_gyro_bias << std::endl;
-  std::cout << "cov_arr: " << cov_arr << std::endl;
 
   Eigen::Matrix4d T_imu_lidar_mat;
   T_imu_lidar_mat << 1.0, 0.0, 0.0, -0.020,
@@ -522,11 +515,6 @@ int main(int argc, char **argv) {
     gyro_data_ = readGyroToEigenXd(gyro_path, first_state_time_micro_, "aevaI_boreas");
   }
 
-  Eigen::Matrix3d gyro_invcov = Eigen::Matrix3d::Identity();
-  gyro_invcov(0,0) = 2.0/(cov_arr[0]);
-  gyro_invcov(1,1) = 2.0/(cov_arr[1]);
-  gyro_invcov(2,2) = 2.0/(cov_arr[2]);
-
   auto tf_sbc = std::make_shared<tf2_ros::StaticTransformBroadcaster>(node);
   auto msg =
       tf2::eigenToTransform(Eigen::Affine3d(T_lidar_robot.inverse().matrix()));
@@ -543,13 +531,11 @@ int main(int argc, char **argv) {
     if (!fs::is_directory(dir_entry)) files.push_back(dir_entry);
   std::sort(files.begin(), files.end());
   CLOG(WARNING, "test") << "Found " << files.size() << " lidar data";
+  const auto start_frame = node->declare_parameter<int>("odometry.start_frame", 0);
+  const auto end_frame = node->declare_parameter<int>("odometry.end_frame", -1);
 
   // thread handling variables
   TestControl test_control(node);
-
-  // Store current gyro and gyro timestamps for the next loop
-  static Eigen::MatrixXd prev_gyro = Eigen::MatrixXd();
-  static std::vector<int64_t> prev_gyro_timestamps = std::vector<int64_t>();
 
   // main loop
   int frame = 0;
@@ -561,6 +547,14 @@ int main(int argc, char **argv) {
     if (!test_control.play()) continue;
     std::this_thread::sleep_for(
         std::chrono::milliseconds(test_control.delay()));
+
+    if (frame < start_frame) {
+      ++it;
+      ++frame;
+      continue;
+    } else if (end_frame > 0 && frame > end_frame) {
+      break;
+    }
 
     const auto filename = getStampFromPath((it)->path().string());
     int64_t time_delta_micro = filename / 1000 - first_state_time_micro_;
@@ -601,10 +595,16 @@ int main(int argc, char **argv) {
     Eigen::MatrixXd current_gyro;
     std::vector<int64_t> gyro_timestamps;
     std::vector<int> inds;
+    bool found_first = false;
     for (int r = 0; r < gyro_data_.rows(); ++r) {
       double meas_time = gyro_data_(r, 1) - dt;
-      if (meas_time >= start_time && meas_time < end_time)
+      if (meas_time >= start_time && meas_time < end_time) {
+        if (!found_first) {
+          found_first = true;
+          inds.push_back(r-1);
+        }
         inds.push_back(r);
+      }
     } // end for r
 
     if (inds.size() == 0) {
@@ -655,13 +655,8 @@ int main(int argc, char **argv) {
     query_data->T_s_r_gyro.emplace(T_imu_lidar_mat * T_lidar_robot);
 
     // set gyro data
-    query_data->gyro.emplace(prev_gyro);
-    query_data->gyro_stamp.emplace(prev_gyro_timestamps);
-    query_data->gyro_invcov.emplace(gyro_invcov);
-
-    // Update previous gyro data and timestamps
-    prev_gyro = current_gyro;
-    prev_gyro_timestamps = gyro_timestamps;;
+    query_data->gyro.emplace(current_gyro);
+    query_data->gyro_stamp.emplace(gyro_timestamps);
 
     // set timestamp of first frame [us]
     query_data->first_state_time.emplace(first_state_time_micro_);
