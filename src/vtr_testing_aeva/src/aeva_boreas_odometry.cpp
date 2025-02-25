@@ -173,7 +173,6 @@ std::pair<int64_t, Eigen::MatrixXd> load_lidar(const std::string &path, const st
     // Include if within start and end time
     if (time_temp > start_time && time_temp <= end_time) {
         Eigen::VectorXd point(10);
-        //std::cout << "time_keep: " << time_keep << std::endl;
         point << x, y, z, radial_velocity, intensity, time_keep, beam_id, line_id, face_id, sensor_id;
         points.push_back(point);
     }
@@ -368,12 +367,12 @@ int main(int argc, char **argv) {
   // disable eigen multi-threading
   Eigen::setNbThreads(1);
 
-  std::cout << "Starting Aeva odometry" << std::endl;
+  CLOG(WARNING, "test") << "Starting Aeva odometry";
 
   std::string yaml_file_path = "external/boreas_vtr_wrapper/src/vtr_testing_aeva/config/aeva_boreas.yaml";
   YAML::Node config = loadYamlFile(yaml_file_path);
 
-  std::cout << "Loaded config file: " << yaml_file_path << std::endl;
+  CLOG(WARNING, "test") << "Loaded config file: " << yaml_file_path;
 
   // load options
   int init_frame = 0;
@@ -393,6 +392,8 @@ int main(int argc, char **argv) {
     const_gyro_bias.push_back(Eigen::Vector3d(gbias[i], gbias[i+1], gbias[i+2]));
   }
 
+  CLOG(WARNING, "test") << "Loaded gyro bias";
+
   std::string gyro_cov_path = sensor_config_path + "/" + model_name + "/gyro_cov.txt";
   std::ifstream co_csv(gyro_cov_path);
   std::vector<double> cov_arr;
@@ -407,6 +408,8 @@ int main(int argc, char **argv) {
   } else {
     throw std::runtime_error("Unable to open gyro_cov file: " + gyro_cov_path);
   }
+
+  CLOG(WARNING, "test") << "Loaded gyro cov file";
 
   Eigen::Matrix4d T_imu_lidar_mat;
   T_imu_lidar_mat << 1.0, 0.0, 0.0, -0.020,
@@ -493,6 +496,9 @@ int main(int argc, char **argv) {
     if (entry.is_regular_file()) filenames_.emplace_back(entry.path().filename().string());
     return entry.is_regular_file();
   });
+
+  CLOG(WARNING, "test") << "Loaded aeva files";
+
   std::sort(filenames_.begin(), filenames_.end(), filecomp);  // custom comparison
 
   last_frame_ = std::min(last_frame_, last_frame);
@@ -560,7 +566,7 @@ int main(int argc, char **argv) {
     int64_t time_delta_micro = filename / 1000 - first_state_time_micro_;
     double start_time = static_cast<double>(time_delta_micro) / 1e6;
 
-    std::cout << "Frame " << frame << " with timestamp " << filename << std::endl;
+    CLOG(WARNING, "test") << "Frame " << frame << " with timestamp " << filename;
 
     // Note: we peak into future data for the end timestamp for evaluation convenience. An online implementation
     // would need different logic, i.e., use the last timestamp of the pointcloud
