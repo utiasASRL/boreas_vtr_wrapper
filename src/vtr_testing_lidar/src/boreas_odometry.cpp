@@ -64,12 +64,17 @@ EdgeTransform load_T_robot_lidar(const fs::path &path) {
   Eigen::Matrix4d T_applanix_lidar_mat;
   for (size_t row = 0; row < 4; row++)
     for (size_t col = 0; col < 4; col++) ifs >> T_applanix_lidar_mat(row, col);
+  // Extrinsic from radar to rear axel
+  Eigen::Matrix4d T_axel_applanix;
+  // Want to estimate at rear axel, this transform has x forward, y right, z down
+  T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
+                    -0.99955003, 0.0299955, 0, 0.0,
+                    0, 0, 1, 1.45,
+                    0, 0, 0, 1;
 
-  Eigen::Matrix4d yfwd2xfwd;
-  yfwd2xfwd << 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1;
-
-  EdgeTransform T_robot_lidar(Eigen::Matrix4d(yfwd2xfwd * T_applanix_lidar_mat),
+  EdgeTransform T_robot_lidar(Eigen::Matrix4d(T_axel_applanix * T_applanix_lidar_mat),
                               Eigen::Matrix<double, 6, 6>::Zero());
+
 #else
   Eigen::Matrix4d T_robot_lidar_mat;
   // clang-format off
@@ -78,6 +83,7 @@ EdgeTransform load_T_robot_lidar(const fs::path &path) {
                        -0.73044281,  0.68297386,  0.        ,  0.        ,
                         0.        ,  0.        ,  1.        , -0.21      ,
                         0.        ,  0.        ,  0.        ,  1.        ;
+
   // clang-format on
   EdgeTransform T_robot_lidar(T_robot_lidar_mat,
                               Eigen::Matrix<double, 6, 6>::Zero());
@@ -171,9 +177,11 @@ int main(int argc, char **argv) {
   // List of lidar data
   std::vector<fs::directory_entry> files;
   for (const auto &dir_entry : fs::directory_iterator{odo_dir / "lidar"})
-    if (!fs::is_directory(dir_entry)) files.push_back(dir_entry);
+    if (dir_entry.path().extension() == ".bin") files.push_back(dir_entry);
   std::sort(files.begin(), files.end());
   CLOG(WARNING, "test") << "Found " << files.size() << " lidar data";
+  const auto start_frame = node->declare_parameter<int>("odometry.start_frame", 0);
+  const auto end_frame = node->declare_parameter<int>("odometry.end_frame", -1);
 
   // thread handling variables
   TestControl test_control(node);
@@ -188,6 +196,14 @@ int main(int argc, char **argv) {
     if (!test_control.play()) continue;
     std::this_thread::sleep_for(
         std::chrono::milliseconds(test_control.delay()));
+
+    if (frame < start_frame) {
+      ++it;
+      ++frame;
+      continue;
+    } else if (end_frame > 0 && frame > end_frame) {
+      break;
+    }
 
     ///
     const auto [timestamp, points] = load_lidar(it->path().string());

@@ -37,10 +37,18 @@ EdgeTransform load_T_robot_lidar(const fs::path &path) {
   for (size_t row = 0; row < 4; row++)
     for (size_t col = 0; col < 4; col++) ifs >> T_applanix_lidar_mat(row, col);
 
-  Eigen::Matrix4d yfwd2xfwd;
-  yfwd2xfwd << 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1;
+  // Eigen::Matrix4d yfwd2xfwd;
+  // yfwd2xfwd << 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1;
 
-  EdgeTransform T_robot_lidar(Eigen::Matrix4d(yfwd2xfwd * T_applanix_lidar_mat),
+  // Extrinsic from radar to rear axel
+  Eigen::Matrix4d T_axel_applanix;
+  // Want to estimate at rear axel, this transform has x forward, y right, z down
+  T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
+                    -0.99955003, 0.0299955, 0, 0.0,
+                    0, 0, 1, 1.45,
+                    0, 0, 0, 1;
+
+  EdgeTransform T_robot_lidar(Eigen::Matrix4d(T_axel_applanix * T_applanix_lidar_mat),
                               Eigen::Matrix<double, 6, 6>::Zero());
 
   return T_robot_lidar;
@@ -59,10 +67,19 @@ EdgeTransform load_T_robot_radar(const fs::path &path) {
   for (size_t row = 0; row < 4; row++)
     for (size_t col = 0; col < 4; col++) ifs2 >> T_radar_lidar_mat(row, col);
 
-  Eigen::Matrix4d yfwd2xfwd;
-  yfwd2xfwd << 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1;
+  // Eigen::Matrix4d yfwd2xfwd;
+  // yfwd2xfwd << 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1;
 
-  EdgeTransform T_robot_radar(Eigen::Matrix4d(yfwd2xfwd * T_applanix_lidar_mat *
+  // Extrinsic from radar to rear axel
+  Eigen::Matrix4d T_axel_applanix;
+  // Want to estimate at rear axel, this transform has x forward, y right, z down
+  T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
+                    -0.99955003, 0.0299955, 0, 0.0,
+                    0, 0, 1, 1.45,
+                    0, 0, 0, 1;
+
+
+  EdgeTransform T_robot_radar(Eigen::Matrix4d(T_axel_applanix * T_applanix_lidar_mat *
                                               T_radar_lidar_mat.inverse()),
                               Eigen::Matrix<double, 6, 6>::Zero());
 #else
@@ -272,9 +289,11 @@ int main(int argc, char **argv) {
   // List of radar data
   std::vector<fs::directory_entry> files;
   for (const auto &dir_entry : fs::directory_iterator{loc_dir / "radar"})
-    if (!fs::is_directory(dir_entry)) files.push_back(dir_entry);
+    if (dir_entry.path().extension() == ".png") files.push_back(dir_entry);
   std::sort(files.begin(), files.end());
   CLOG(WARNING, "test") << "Found " << files.size() << " radar data";
+  const auto start_frame = node->declare_parameter<int>("localization.start_frame", 0);
+  const auto end_frame = node->declare_parameter<int>("localization.end_frame", -1);
 
   // thread handling variables
   TestControl test_control(node);
@@ -283,6 +302,10 @@ int main(int argc, char **argv) {
   int frame = 0;
   auto it = files.begin();
   while (it != files.end()) {
+    if (end_frame >= 0 && frame > end_frame) {
+      break;
+    }
+
     if (!rclcpp::ok()) break;
     rclcpp::spin_some(node);
     if (test_control.terminate()) break;
@@ -321,6 +344,9 @@ int main(int argc, char **argv) {
 
     // fill in the vehicle to sensor transform and frame name
     query_data->radar::RadarQueryCache::T_s_r.emplace(T_radar_robot);
+
+    // Add sequence name to query data
+    query_data->seq_name = stem;
 
     // execute the pipeline
     tactic->input(query_data);

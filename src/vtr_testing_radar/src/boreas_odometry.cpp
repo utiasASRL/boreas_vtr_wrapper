@@ -31,7 +31,6 @@ int64_t getStampFromPath(const std::string &path) {
 }
 
 EdgeTransform load_T_robot_radar(const fs::path &path) {
-#if true
   std::ifstream ifs1(path / "calib" / "T_applanix_lidar.txt", std::ios::in);
   std::ifstream ifs2(path / "calib" / "T_radar_lidar.txt", std::ios::in);
 
@@ -54,13 +53,6 @@ EdgeTransform load_T_robot_radar(const fs::path &path) {
   EdgeTransform T_robot_radar(Eigen::Matrix4d(T_axel_applanix * T_applanix_lidar_mat *
                                               T_radar_lidar_mat.inverse()),
                               Eigen::Matrix<double, 6, 6>::Zero());
-
-#else
-  (void)path;
-  // robot frame == radar frame
-  EdgeTransform T_robot_radar(Eigen::Matrix4d(Eigen::Matrix4d::Identity()),
-                              Eigen::Matrix<double, 6, 6>::Zero());
-#endif
 
   return T_robot_radar;
 }
@@ -151,9 +143,11 @@ int main(int argc, char **argv) {
   std::vector<fs::directory_entry> files;
   const auto radar_dir_name = node->declare_parameter<std::string>("boreas.radar_dir_name", "radar");
   for (const auto &dir_entry : fs::directory_iterator{odo_dir / radar_dir_name})
-    if (!fs::is_directory(dir_entry)) files.push_back(dir_entry);
+    if (dir_entry.path().extension() == ".png") files.push_back(dir_entry);
   std::sort(files.begin(), files.end());
   CLOG(WARNING, "test") << "Found " << files.size() << " radar data";
+  const auto start_frame = node->declare_parameter<int>("odometry.start_frame", 0);
+  const auto end_frame = node->declare_parameter<int>("odometry.end_frame", -1);
 
   // thread handling variables
   TestControl test_control(node);
@@ -168,6 +162,14 @@ int main(int argc, char **argv) {
     if (!test_control.play()) continue;
     std::this_thread::sleep_for(
         std::chrono::milliseconds(test_control.delay()));
+
+    if (frame < start_frame) {
+      ++it;
+      ++frame;
+      continue;
+    } else if (end_frame > 0 && frame > end_frame) {
+      break;
+    }
 
     ///
     const auto timestamp = getStampFromPath(it->path().string());

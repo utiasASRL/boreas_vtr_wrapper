@@ -112,6 +112,8 @@
         visualize: true
 
     odometry:
+      start_frame: 0
+      end_frame: -1 # -1 means process all frames
       icp:
         type: lidar.odometry_icp
 
@@ -147,6 +149,10 @@
 
         # threshold
         min_matched_ratio: 0.0
+        max_trans_vel_diff: 1000.0 # 1000.0 (or some large number) to disable
+        max_rot_vel_diff: 1000.0 # 1000.0 (or some large number) to disable
+        max_trans_diff: 1000.0 # 1000.0 (or some large number) to disable
+        max_rot_diff: 1000.0 # 1000.0 (or some large number) to disable
 
         visualize: true
 
