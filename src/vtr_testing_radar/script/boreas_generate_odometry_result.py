@@ -89,9 +89,14 @@ def main(dataset_dir, result_dir, velocity):
   parser = BagFileParser(bag_file)
   messages = parser.get_bag_messages("odometry_result")
 
+  # get timestamps at which to generate results (radar frame timestamps)
+  result_stamps = np.array([frame.timestamp_micro for frame in dataset_odo.sequences[0].radar_frames])
+
   result = []
   for _, message in enumerate(messages):
     timestamp = int(int(message[1].timestamp) / 1000)
+    if timestamp not in result_stamps:
+      continue
     T_w_r_vec = np.array(message[1].t_world_robot.xi)[..., None]
     T_w_r = se3op.vec2tran(T_w_r_vec)
     T_w_a = T_w_r @ T_robot_radar
@@ -119,6 +124,9 @@ def main(dataset_dir, result_dir, velocity):
 
     vel_results = []
     for _, message in enumerate(messages):
+      timestamp = int(int(message[0]) / 1000)
+      if timestamp not in result_stamps:
+        continue
       w_v_r_robot = np.zeros((6))
       w_v_r_robot[0] = message[1].linear.x
       w_v_r_robot[1] = message[1].linear.y
@@ -131,7 +139,6 @@ def main(dataset_dir, result_dir, velocity):
       w_r_v_radar[:3] = (- w_v_r_robot[:3].reshape(1, 3) @ T_robot_radar[:3, :3]).flatten()
       w_r_v_radar[3:] = (- w_v_r_robot[3:].reshape(1, 3) @ T_robot_radar[:3, :3]).flatten()
 
-      timestamp = int(int(message[0]) / 1000)
       vel_results.append([timestamp] + w_r_v_radar.flatten().tolist())
 
     output_dir = osp.join(result_dir, "odometry_vel_result")
