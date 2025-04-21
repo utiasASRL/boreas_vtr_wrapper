@@ -76,6 +76,13 @@ def main(dataset_dir, result_dir, velocity):
   T_applanix_lidar = dataset_odo.sequences[0].calib.T_applanix_lidar
   T_robot_applanix = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
   
+  T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
+                            [-0.99955003, 0.0299955, 0., 0.0],
+                            [ 0, 0, 1, 1.45],
+                            [ 0, 0, 0, 1]])
+
+  T_robot_applanix = T_axel_applanix
+
   # TODO: robot frame should be at rear-axle of the vehicle, update this!
   # ## old way of getting robot applanix
   #T_radar_lidar = dataset_odo.sequences[0].calib.T_radar_lidar

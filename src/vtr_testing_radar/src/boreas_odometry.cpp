@@ -42,9 +42,9 @@ EdgeTransform load_T_robot_radar(const fs::path &path) {
   for (size_t row = 0; row < 4; row++)
     for (size_t col = 0; col < 4; col++) ifs2 >> T_radar_lidar_mat(row, col);
 
-  // Extrinsic from radar to rear axel
+  // Extrinsic from applanix to rear axel
   Eigen::Matrix4d T_axel_applanix;
-  // Want to estimate at rear axel, this transform has x forward, y right, z down
+  // Want to estimate at rear axel
   T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
                     -0.99955003, 0.0299955, 0, 0.0,
                     0, 0, 1, 1.45,

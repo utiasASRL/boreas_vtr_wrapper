@@ -70,7 +70,13 @@ def main(dataset_dir, result_dir):
     # Ground truth is provided w.r.t sensor, so we set sensor to vehicle
     # transform to identity
     yfwd2xfwd = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-    T_robot_lidar_odo = yfwd2xfwd @ sequence.calib.T_applanix_lidar
+
+    T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
+                              [-0.99955003, 0.0299955, 0., 0.0],
+                              [ 0, 0, 1, 1.45],
+                              [ 0, 0, 0, 1]])
+
+    T_robot_lidar_odo = T_axel_applanix @ sequence.calib.T_applanix_lidar
     # T_robot_lidar_odo = sequence.calib.T_applanix_lidar
     T_lidar_robot_odo = get_inverse_tf(T_robot_lidar_odo)
 
@@ -91,7 +97,13 @@ def main(dataset_dir, result_dir):
       # Ground truth is provided w.r.t sensor, so we set sensor to vehicle
       # transform to identity
       yfwd2xfwd = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-      T_robot_lidar_loc = yfwd2xfwd @ sequence.calib.T_applanix_lidar
+
+      T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
+                                [-0.99955003, 0.0299955, 0., 0.0],
+                                [ 0, 0, 1, 1.45],
+                                [ 0, 0, 0, 1]])
+
+      T_robot_lidar_loc = T_axel_applanix @ sequence.calib.T_applanix_lidar
       # T_robot_lidar_loc = sequence.calib.T_applanix_lidar
       T_lidar_robot_loc = get_inverse_tf(T_robot_lidar_loc)
 
