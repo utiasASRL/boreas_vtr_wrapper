@@ -30,14 +30,14 @@ git submodule update --init --remote
 
 Reference: https://github.com/utiasASRL/vtr3/wiki/Installation-Guide
 
-## Download vtr_testing_radar
+## Download boreas_vtr_wrapper
 
 This package contains testing code for lidar and radar pipeline. Download it do your local filesystem.
 
 ```Bash
 cd ${VTRROOT}
-git clone git@github.com:cheneyuwu/vtr_testing_radar.git
-cd vtr_testing_radar
+git clone git@github.com:utiasASRL/boreas_vtr_wrapper.git
+cd boreas_vtr_wrapper
 git checkout aeva_cov_interp
 ```
 
@@ -96,12 +96,12 @@ colcon build --symlink-install --packages-up-to vtr_lidar vtr_radar vtr_radar_li
 
 wait until it finishes.
 
-## Build and Install vtr_testing_radar (this package)
+## Build and Install boreas_vtr_wrapper (this package)
 
 ```Bash
 source /opt/ros/galactic/setup.bash
 source ${VTRSRC}/main/install/setup.bash # source the vtr3 environment
-cd ~/ASRL/vtr_testing_radar # go to where this repo is located
+cd ~/ASRL/boreas_vtr_wrapper # go to where this repo is located
 colcon build --symlink-install
 ```
 
@@ -149,7 +149,7 @@ ros2 run rqt_reconfigure rqt_reconfigure
 ## Odometry (Teach) and Localization (Repeat)
 
 ```Bash
-export VTRRROOT=${VTRROOT}/vtr_testing_radar # location of this repository CHANGE THIS!
+export VTRRROOT=${VTRROOT}/boreas_vtr_wrapper # location of this repository CHANGE THIS!
 export VTRRDATA=${VTRDATA}/boreas/sequences  # dataset location (where the boreas-xxxxx folders at) CHANGE THIS!
 export VTRRRESULT=${VTRTEMP}/radar/boreas    # default result location
 mkdir -p ${VTRRRESULT}
@@ -242,7 +242,7 @@ For `VTRRDATA`, it is supposed to be the directory that contains all boreas sequ
 
 ```
 # define the following environment variables VTRR=VTR RaDAR
-export VTRRROOT=${VTRROOT}/vtr_testing_radar # location of this repository CHANGE THIS!
+export VTRRROOT=${VTRROOT}/boreas_vtr_wrapper # location of this repository CHANGE THIS!
 export VTRRDATA=${VTRDATA}/boreas/sequences  # dataset location (where the boreas-xxxxx folders at) CHANGE THIS!
 export VTRRRESULT=${VTRTEMP}/radar/boreas    # result location MAYBE CHANGE THIS!
 mkdir -p ${VTRRRESULT}

@@ -24,10 +24,10 @@ source /opt/ros/galactic/setup.bash  # source the ROS environment
 colcon build --symlink-install --packages-up-to vtr_radar  # only build up to the vtr_radar package, we don't need the other packages
 ```
 
-- After building vtr3, we need to build the vtr_testing_radar package, using the following:
+- After building vtr3, we need to build the boreas_vtr_wrapper package, using the following:
 
 ```
 source ${VTRSRC}/main/install/setup.bash  # source the vtr3 environment
-cd ~/ASRL/vtr_testing_radar  # go to where this repo is located
+cd ~/ASRL/boreas_vtr_wrapper  # go to where this repo is located
 colcon build --symlink-install
 ```

@@ -38,7 +38,7 @@ This package contains testing code for lidar and radar pipeline. Download it do 
 
 ```
 cd ${VTRROOT}
-git clone git@github.com:cheneyuwu/vtr_testing_radar.git
+git clone git@github.com:utiasASRL/boreas_vtr_wrapper.git
 ```
 
 ## Build VTR3 Docker Image
@@ -89,13 +89,13 @@ colcon build --symlink-install --packages-up-to vtr_lidar vtr_radar # only build
 
 wait until it finishes.
 
-# Build and Install vtr_testing_radar (this package)
+# Build and Install boreas_vtr_wrapper (this package)
 
 Start a new terminal (**terminal 2**) and enter the container
 
 ```
 source ${VTRSRC}/main/install/setup.bash # source the vtr3 environment
-cd ~/ASRL/vtr_testing_radar # go to where this repo is located
+cd ~/ASRL/boreas_vtr_wrapper # go to where this repo is located
 colcon build --symlink-install
 ```
 
@@ -107,8 +107,8 @@ Note that whenever you change any code in the vtr3 repo, you need to re-compile 
 
 Go to either of the following
 
-- vtr_testing_radar/src/vtr_testing_radar/script/boreas_testing.sh
-- vtr_testing_radar/src/vtr_testing_lidar/script/boreas_testing.sh
+- boreas_vtr_wrapper/src/vtr_testing_radar/script/boreas_testing.sh
+- boreas_vtr_wrapper/src/vtr_testing_lidar/script/boreas_testing.sh
   and follow instructions there
 
 Note that any commands specified in these two files should be run inside the container.

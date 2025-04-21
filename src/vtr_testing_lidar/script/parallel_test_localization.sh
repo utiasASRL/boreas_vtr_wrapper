@@ -18,7 +18,7 @@ REFERENCE='boreas-2020-11-26-13-58' # 'boreas-2021-09-02-11-42'
 GROUPSIZE=3
 
 # define the following environment variables VTRR=VTR RaDAR
-export VTRRROOT=${VTRROOT}/vtr_testing_radar # location of this repository CHANGE THIS!
+export VTRRROOT=${VTRROOT}/boreas_vtr_wrapper # location of this repository CHANGE THIS!
 # export VTRRDATA=${VTRDATA}/boreas/sequences  # dataset location (where the boreas-xxxxx folders at) CHANGE THIS!
 export VTRRRESULT=${VTRTEMP}/lidar    # result location MAYBE CHANGE THIS!
 mkdir -p ${VTRRRESULT}
