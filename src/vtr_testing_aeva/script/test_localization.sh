@@ -5,14 +5,21 @@
 # Get arguments
 ODO_INPUT=$1
 LOC_INPUT=$2
-TYPE=$3
+
+# Using the config within the aeva package
+PARAM_FILE=${VTRRROOT}/src/vtr_testing_aeva/config/aeva_boreas.yaml
+  
+# Save param file
+SAVE_CONFIG=aeva_localization_config.yaml
+mkdir -p ${VTRRRESULT}/${ODO_INPUT}
+cp ${PARAM_FILE} ${VTRRRESULT}/${ODO_INPUT}/${SAVE_CONFIG}
+echo "PARAM FILE IS ${PARAM_FILE}"
 
 # Log
 echo "Running localization on sequence ${LOC_INPUT} to reference sequence ${ODO_INPUT}, storing result to ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}"
-echo "Using dataset ${TYPE}"
 
 # Source the VTR environment with the testing package
-source ${VTRRROOT}/install/setup.bash
+source ${VTRRROOT}/src/install/setup.bash
 
 graph_dir=${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}/graph
 if [ -d $graph_dir ]; then
@@ -30,35 +37,10 @@ fi
 rm -r ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}
 mkdir -p ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}
 cp -r ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}/*  ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}
-ros2 run vtr_testing_aeva vtr_testing_aeva_${TYPE}_localization  \
+ros2 run vtr_testing_aeva vtr_testing_aeva_aeva_boreas_localization  \
   --ros-args -p use_sim_time:=true \
   -r __ns:=/vtr \
-  --params-file ${VTRRROOT}/src/vtr_testing_aeva/config/${TYPE}.yaml \
+  --params-file ${PARAM_FILE} \
   -p data_dir:=${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT} \
   -p odo_dir:=${VTRRDATA}/${ODO_INPUT} \
   -p loc_dir:=${VTRRDATA}/${LOC_INPUT}
-
-# # Define the range of loc_threshold values
-# for loc_threshold in 50 100 150 200 250 300 350 400; do
-#   rm -r ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}
-#   mkdir -p ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}
-#   cp -r ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}/*  ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}
-
-#   # Modify the parameter file
-#   sed -i "s/loc_threshold: [0-9]*/loc_threshold: ${loc_threshold}/" ${VTRRROOT}/src/vtr_testing_aeva/config/${TYPE}.yaml
-
-#   # Run the test
-#   ros2 run vtr_testing_aeva vtr_testing_aeva_${TYPE}_localization  \
-#     --ros-args -p use_sim_time:=true \
-#     -r __ns:=/vtr \
-#     --params-file ${VTRRROOT}/src/vtr_testing_aeva/config/${TYPE}.yaml \
-#     -p data_dir:=${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT} \
-#     -p odo_dir:=${VTRRDATA}/${ODO_INPUT} \
-#     -p loc_dir:=${VTRRDATA}/${LOC_INPUT}
-
-#   # Log the result
-#   echo "Test completed with loc_threshold=${loc_threshold}"
-
-#   # Rename the data directory to include the threshold number
-#   mv ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT} ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}_threshold_${loc_threshold}
-# done

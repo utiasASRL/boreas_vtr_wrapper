@@ -156,7 +156,7 @@ mkdir -p ${VTRRRESULT}
 ```
 
 ```Bash
-source ${VTRRROOT}/install/setup.bash
+source ${VTRRROOT}/src/install/setup.bash
 # Choose a Teach (ODO_INPUT) and Repeat (LOC_INPUT) run from boreas dataset
 ODO_INPUT=boreas-2020-11-26-13-58
 LOC_INPUT=boreas-2021-01-26-10-59

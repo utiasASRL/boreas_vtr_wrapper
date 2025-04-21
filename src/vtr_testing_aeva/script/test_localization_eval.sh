@@ -4,26 +4,25 @@
 
 # Get arguments
 ODO_INPUT=$1
-TYPE=$2
-LOC_INPUT=$3
 
 # Log
 echo "Evaluating localization to reference sequence ${ODO_INPUT}, storing result to ${VTRRRESULT}/${ODO_INPUT}"
 
 # Source the VTR environment with the testing package
-source ${VTRRROOT}/install/setup.bash
+source ${VTRRROOT}/src/install/setup.bash
 source ${VTRROOT}/venv/bin/activate
 
-#   - dump localization result to boreas expected format (txt file)
-if [ "$TYPE" = "aeva_boreas" ] || [ "$TYPE" = "aevaii_boreas" ]; then
-    python ${VTRRROOT}/src/vtr_testing_aeva/script/boreas_generate_localization_result.py --dataset ${VTRRDATA} --path ${VTRRRESULT}/${ODO_INPUT} --type ${TYPE} --input_loc_dir ${LOC_INPUT}
-elif [ "$TYPE" = "aeva_hq" ]; then
-    python ${VTRRROOT}/src/vtr_testing_aeva/script/aevahq_generate_localization_result.py --dataset ${VTRRDATA} --path ${VTRRRESULT}/${ODO_INPUT}
-fi
+# Dump localization result to boreas expected format (txt file)
+python ${VTRRROOT}/src/vtr_testing_aeva/script/boreas_generate_localization_result.py --dataset ${VTRRDATA} --path ${VTRRRESULT}/${ODO_INPUT}
 
-#   - evaluate the result using the evaluation script
-python -m pyboreas.eval.localization_aeva --gt ${VTRRDATA} --pred ${VTRRRESULT}/${ODO_INPUT}/localization_result --ref_seq ${ODO_INPUT} --data_type ${TYPE} --ref_sensor aeva --test_sensor aeva --dim 3  --plot ${VTRRRESULT}/${ODO_INPUT}/localization_result/lidar-lidar --loc_dir ${LOC_INPUT}
+# Evaluate the result using the evaluation script
+python -m pyboreas.eval.localization_aeva --gt ${VTRRDATA} --pred ${VTRRRESULT}/${ODO_INPUT}/localization_result --ref_seq ${ODO_INPUT} --ref_sensor aeva --test_sensor aeva --dim 3  --plot ${VTRRRESULT}/${ODO_INPUT}/localization_result/lidar-lidar
 
-# Copy all .log files to the new folder
-mkdir -p ${VTRRRESULT}/${ODO_INPUT}/localization_result/${LOC_INPUT}_logs
-cp ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}/*.log ${VTRRRESULT}/${ODO_INPUT}/localization_result/${LOC_INPUT}_logs/
+# Copy all .log files to the results folder
+for folder in ${VTRRRESULT}/${ODO_INPUT}/boreas*/; do
+    if [[ "$(basename "$folder")" != "${ODO_INPUT}" ]]; then
+        cd "$folder" || continue
+        mkdir -p ${VTRRRESULT}/${ODO_INPUT}/localization_result/$(basename "$folder")_logs
+        cp *.log ${VTRRRESULT}/${ODO_INPUT}/localization_result/$(basename "$folder")_logs/
+    fi
+done

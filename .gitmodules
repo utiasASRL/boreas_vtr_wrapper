@@ -1,0 +1,12 @@
+[submodule "vtr3"]
+	path = external/vtr3
+	url = https://github.com/utiasASRL/vtr3.git
+	branch = aeva
+[submodule "boreas_vtr_wrapper"]
+	path = external/boreas_vtr_wrapper
+	url = https://github.com/utiasASRL/boreas_vtr_wrapper.git
+	branch = aeva
+[submodule "pyboreas"]
+	path = external/pyboreas
+	url = https://github.com/utiasASRL/pyboreas.git
+	branch = aeva

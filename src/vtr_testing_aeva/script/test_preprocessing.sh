@@ -9,7 +9,7 @@ ODO_INPUT=$1
 echo "Running preprocessing on sequence ${ODO_INPUT}, storing result to ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}"
 
 # Source the VTR environment with the testing package
-source ${VTRRROOT}/install/setup.bash
+source ${VTRRROOT}/src/install/setup.bash
 
 ros2 run vtr_testing_aeva vtr_testing_aeva_aeva_preprocessing \
   --ros-args -p use_sim_time:=true \

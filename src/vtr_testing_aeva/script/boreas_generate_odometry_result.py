@@ -58,20 +58,29 @@ def main(dataset_dir, result_dir, velocity):
   print("Result Directory:", result_dir)
   print("Odometry Run:", odo_input_seq)
   print("Dataset Directory:", dataset_dir)
-  
-  # Aeries II transformation
-  T_sr = np.array([[ 0.99982945,  0.01750912,  0.00567659, -1.03971349],
-                   [-0.01754661,  0.99973757,  0.01034526, -0.38788971],
-                   [-0.00549427, -0.01044368,  0.99993037, -1.69798033],
-                   [ 0, 0, 0, 1]]).astype(np.float64)
-  
-  T_robot_lidar = get_inverse_tf(T_sr)
 
-  # try:
-  #   dataset_odo = BoreasDataset(osp.normpath(dataset_dir), [[odo_input_seq]])
-  # except:
-  #   print("Data set does not exist:", dataset_dir, odo_input_seq)
-  #   return
+  try:
+    dataset_odo = BoreasDataset(osp.normpath(dataset_dir), [[odo_input_seq]])
+  except:
+    print("Data set does not exist:", dataset_dir, odo_input_seq)
+    return
+  
+  # # Aeries II transformation
+  # T_sr = np.array([[ 0.99982945,  0.01750912,  0.00567659, -1.03971349],
+  #                  [-0.01754661,  0.99973757,  0.01034526, -0.38788971],
+  #                  [-0.00549427, -0.01044368,  0.99993037, -1.69798033],
+  #                  [ 0, 0, 0, 1]]).astype(np.float64)
+  
+  # T_robot_lidar = get_inverse_tf(T_sr)
+  
+  T_app_aeva = dataset_odo.sequences[0].calib.T_applanix_aeva
+  
+  T_ax_app = np.array([[ 0.0299955,  0.99955003,  0, 0.51],
+                       [-0.99955003,  0.0299955,  0, 0.0],
+                       [ 0, 0, 1, 1.45],
+                       [ 0, 0, 0, 1]]).astype(np.float64)
+  
+  T_robot_lidar = T_ax_app @ T_app_aeva
 
   odo_dir = osp.join(result_dir, odo_input_seq)
 
@@ -94,27 +103,27 @@ def main(dataset_dir, result_dir, velocity):
     T_r_w_res = get_inverse_tf(T_w_r).flatten().tolist()[:12]
     result.append([timestamp] + T_r_w_res)
   
-  # if velocity:
-  #   bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "odometry_vel_result")
-  #   parser = BagFileParser(bag_file)
-  #   messages = parser.get_bag_messages("odometry_vel_result")
+  if velocity:
+    bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "odometry_vel_result")
+    parser = BagFileParser(bag_file)
+    messages = parser.get_bag_messages("odometry_vel_result")
 
-    # vel_results = []
-    # for _, message in enumerate(messages):
-    #   w_v_r_robot = np.zeros((6))
-    #   w_v_r_robot[0] = message[1].linear.x
-    #   w_v_r_robot[1] = message[1].linear.y
-    #   w_v_r_robot[2] = message[1].linear.z
-    #   w_v_r_robot[3] = message[1].angular.x
-    #   w_v_r_robot[4] = message[1].angular.y
-    #   w_v_r_robot[5] = message[1].angular.z
+    vel_results = []
+    for _, message in enumerate(messages):
+      w_v_r_robot = np.zeros((6))
+      w_v_r_robot[0] = message[1].linear.x
+      w_v_r_robot[1] = message[1].linear.y
+      w_v_r_robot[2] = message[1].linear.z
+      w_v_r_robot[3] = message[1].angular.x
+      w_v_r_robot[4] = message[1].angular.y
+      w_v_r_robot[5] = message[1].angular.z
 
-    #   w_r_v_lidar = np.zeros((6))
-    #   w_r_v_lidar[:3] = (- w_v_r_robot[:3].reshape(1, 3) @ T_robot_lidar[:3, :3]).flatten()
-    #   w_r_v_lidar[3:] = (- w_v_r_robot[3:].reshape(1, 3) @ T_robot_lidar[:3, :3]).flatten()
+      w_r_v_lidar = np.zeros((6))
+      w_r_v_lidar[:3] = (- w_v_r_robot[:3].reshape(1, 3) @ T_robot_lidar[:3, :3]).flatten()
+      w_r_v_lidar[3:] = (- w_v_r_robot[3:].reshape(1, 3) @ T_robot_lidar[:3, :3]).flatten()
 
-    #   timestamp = int(int(message[0]) / 1000)
-    #   vel_results.append([timestamp] + w_r_v_lidar.flatten().tolist())
+      timestamp = int(int(message[0]) / 1000)
+      vel_results.append([timestamp] + w_r_v_lidar.flatten().tolist())
 
   output_dir = osp.join(result_dir, "odometry_result")
   os.makedirs(output_dir, exist_ok=True)
@@ -130,20 +139,20 @@ def main(dataset_dir, result_dir, velocity):
     writer.writerows(result)
     print("Written to file:", osp.join(output_dir, odo_input_seq + ".txt"))
     
-  # if velocity:
-  #   output_dir = osp.join(result_dir, "odometry_vel_result")
-  #   os.makedirs(output_dir, exist_ok=True)
-  #   with open(osp.join(output_dir, odo_input + ".txt"), "+w") as file:
-  #     writer = csv.writer(file, delimiter=' ')
-  #     writer.writerows(vel_results)
-  #     print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
+  if velocity:
+    output_dir = osp.join(result_dir, "odometry_vel_result")
+    os.makedirs(output_dir, exist_ok=True)
+    with open(osp.join(output_dir, odo_input + ".txt"), "+w") as file:
+      writer = csv.writer(file, delimiter=' ')
+      writer.writerows(vel_results)
+      print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
 
-  #   output_dir = osp.join(result_dir, "../odometry_vel_result")
-  #   os.makedirs(output_dir, exist_ok=True)
-  #   with open(osp.join(output_dir, odo_input + ".txt"), "+w") as file:
-  #     writer = csv.writer(file, delimiter=' ')
-  #     writer.writerows(vel_results)
-  #     print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
+    output_dir = osp.join(result_dir, "../odometry_vel_result")
+    os.makedirs(output_dir, exist_ok=True)
+    with open(osp.join(output_dir, odo_input + ".txt"), "+w") as file:
+      writer = csv.writer(file, delimiter=' ')
+      writer.writerows(vel_results)
+      print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
 
 
 if __name__ == "__main__":

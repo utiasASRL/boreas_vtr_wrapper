@@ -1,0 +1,7 @@
+pyyaml
+pandas
+scikit-learn
+catkin_pkg
+empy
+lark
+-e ./external/pyboreas

@@ -24,18 +24,6 @@ using namespace vtr::logging;
 using namespace vtr::tactic;
 using namespace vtr::testing;
 
-YAML::Node loadYamlFile(const std::string& file_path) {
-  YAML::Node config;
-  try {
-    config = YAML::LoadFile(file_path);
-  } catch (const YAML::BadFile& e) {
-    throw std::runtime_error("Unable to open YAML file: " + file_path);
-  } catch (const YAML::ParserException& e) {
-    throw std::runtime_error("Error parsing YAML file: " + file_path);
-  }
-  return config;
-}
-
 Eigen::MatrixXd readCSVtoEigenXd(std::ifstream &csv) {
   std::string line;
   std::string cell;
@@ -60,11 +48,6 @@ int64_t getStampFromPath(const std::string &path) {
   boost::split(parts, stem, boost::is_any_of("."));
   int64_t time1 = std::stoll(parts[0]);
   return time1 * 1000;
-}
-
-Eigen::Vector3d polarToXYZ(double range, double azimuth, double elevation) {
-  double xy = range * cos(elevation);
-  return Eigen::Vector3d(xy * cos(azimuth), xy * sin(azimuth), range * sin(elevation));
 }
 
 std::vector<Eigen::MatrixXd> loadElevationOrder(const std::string &bo_path) {
@@ -266,24 +249,31 @@ std::pair<int64_t, Eigen::MatrixXd> load_new_lidar(const std::string &path, doub
   return std::make_pair(fields, pc);
 }
 
-EdgeTransform load_T_lidar_robot(bool new_lidar) {
-  Eigen::Matrix4d T_lidar_vehicle_mat;
-  if (new_lidar) {
-    // Aeries II boreas
-    T_lidar_vehicle_mat << 0.99982945,  0.01750912,  0.00567659, -1.03971349,
-                          -0.01754661,  0.99973757,  0.01034526, -0.38788971,
-                          -0.00549427, -0.01044368,  0.99993037, -1.69798033,
-                           0.0,         0.0,         0.0,         1.0;
+EdgeTransform load_T_lidar_robot(const fs::path &path, bool new_lidar) {
+  std::ifstream ifs1(path / "calib" / "T_applanix_aeva.txt", std::ios::in);
+
+  Eigen::Matrix4d T_applanix_aeva_mat;
+  if (!ifs1.is_open()) {
+    CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_aeva.txt. Loading preset.";
+    T_applanix_aeva_mat << 0.0116474, -0.99998734, 0.0, -0.37043642,
+                            0.9999333, 0.0116284, 0.0, 0.39745466,
+                            0.0, 0.0, 1.0, -0.1032,
+                            0.0, 0.0, 0.0, 1.0;
   } else {
-    // Aeries I boreas
-    T_lidar_vehicle_mat << 0.9999366830849237, 0.008341717781538466, 0.0075534496251198685, -1.0119098938516395,
-                          -0.008341717774127972, 0.9999652112886684, -3.150635091210066e-05, -0.39658824335171944,
-                          -0.007553449599178521, -3.1504388681967066e-05, 0.9999714717963843, -1.697000000000001,
-                           0, 0, 0, 1;
+    for (size_t row = 0; row < 4; row++)
+      for (size_t col = 0; col < 4; col++) ifs1 >> T_applanix_aeva_mat(row, col);
   }
-  
-  EdgeTransform T_lidar_robot(T_lidar_vehicle_mat,                    // transform
-                              Eigen::Matrix<double, 6, 6>::Zero());   // covariance
+
+  // Extrinsic from applanix to rear axel
+  Eigen::Matrix4d T_axel_applanix;
+  // Want to estimate at rear axel
+  T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
+                    -0.99955003, 0.0299955, 0, 0.0,
+                      0, 0, 1, 1.45,
+                      0, 0, 0, 1;
+
+  EdgeTransform T_lidar_robot(Eigen::Matrix4d((T_axel_applanix * T_applanix_aeva_mat).inverse()),   // transform
+                              Eigen::Matrix<double, 6, 6>::Zero());                                 // covariance
   return T_lidar_robot;
 }
 
@@ -300,66 +290,6 @@ std::string getFirstFilename(const std::string& dir_path) {
         first_filename = dir_iter->path().filename().string();
     }
     return first_filename;
-}
-
-Eigen::MatrixXd readGyroToEigenXd(const std::string &file_path, const int64_t& first_state_time_micro, const std::string& dataset) {
-  // this function is specifically designed for 2 datasets: aeva_boreas and aeva_hq
-  if (dataset != "aevaI_boreas" && dataset != "aevaII_boreas") 
-    throw std::runtime_error{"[readGyroToEigenXd] unknown dataset specified!"};
-
-  std::ifstream imu_file(file_path);
-  std::vector<std::vector<double>> mat_vec;
-  if (imu_file.is_open()) {
-    std::string line;
-    std::getline(imu_file, line);  // header
-    std::vector<double> row_vec(5);
-    for (; std::getline(imu_file, line);) {
-      if (line.empty()) continue;
-      std::stringstream ss(line);
-
-      int64_t timestamp = 0;
-      double timestamp_sec = 0;
-      double r = 0, p = 0, y = 0;
-      for (int i = 0; i < 7; ++i) {
-        std::string value;
-        std::getline(ss, value, ',');
-
-        if (i == 0) {
-          timestamp = std::stol(value);
-          timestamp_sec = static_cast<double>(timestamp - first_state_time_micro)*1e-6;
-        } else if (dataset == "aevaI_boreas") {  // Note: r and p are flipped for aeva_boreas
-          if (i == 2) 
-            r = std::stod(value);
-          else if (i == 1)
-            p = std::stod(value);
-          else if (i == 3)
-            y = std::stod(value);
-        } else if (dataset == "aevaII_boreas") {
-          if (i == 1)
-            r = std::stod(value);
-          else if (i == 2)
-            p = std::stod(value);
-          else if (i == 3)
-            y = std::stod(value);
-        }
-      } // end for row
-      row_vec[0] = static_cast<int64_t>(timestamp);
-      row_vec[1] = timestamp_sec;
-      row_vec[2] = r;
-      row_vec[3] = p;
-      row_vec[4] = y;
-      mat_vec.push_back(row_vec);
-    } // end for line
-  } // end if
-  else {
-    throw std::runtime_error{"unable to open file: " + file_path};
-  }
-
-  // output eigen matrix
-  Eigen::MatrixXd output = Eigen::MatrixXd(mat_vec.size(), mat_vec[0].size());
-  for (int i = 0; i < (int)mat_vec.size(); ++i) output.row(i) = Eigen::VectorXd::Map(&mat_vec[i][0], mat_vec[i].size());
-
-  return output;
 }
 
 Eigen::Matrix3d toRoll(const double &r) {
@@ -408,62 +338,122 @@ EdgeTransform load_T_enu_lidar_init(const fs::path &path) {
   return T;
 }
 
+void load_all_imu_meas(const fs::path &imu_meas_file, std::vector<Eigen::MatrixXd> &all_imu_meas, fs::path imu_file_name) {
+  std::ifstream imu_stream(imu_meas_file, std::ios::in);
+  // Get rid of header (GPSTime,angvel_z,angvel_y,angvel_x,accelz,accely,accelx)
+  std::string header;
+  std::getline(imu_stream, header);
+  // Loop over all imu measurements
+  std::string imu_meas;
+  while (std::getline(imu_stream, imu_meas)) {
+      std::stringstream ss(imu_meas);
+      std::vector<long double> imu;
+      for (std::string str; std::getline(ss, str, ',');)
+              imu.push_back(std::stod(str));
+      Eigen::MatrixXd imu_meas_mat = Eigen::MatrixXd(4, 1);
+      if (imu_file_name == "imu.csv" || imu_file_name == "imu_raw.csv") {
+        imu_meas_mat << imu[0], imu[3], imu[2], imu[1]; // timestamp, angvel_x, angvel_y, angvel_z
+      } else if (imu_file_name == "dmu_imu.csv") {
+        imu_meas_mat << imu[0], imu[7], imu[8], imu[9]; // timestamp, angvel_x, angvel_y, angvel_z
+      } else if (imu_file_name == "aeva_imu.csv") {
+        imu_meas_mat << imu[0], imu[1], imu[2], imu[3]; // timestamp, angvel_x, angvel_y, angvel_z
+      } else {
+        CLOG(ERROR, "boreas_wrapper") << "Unknown IMU file name: " << imu_file_name;
+        break;
+      }        
+      all_imu_meas.push_back(imu_meas_mat);
+  }
+}
+
+EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name) {
+  EdgeTransform T_robot_imu;
+  if (imu_name == "dmu") {
+    std::ifstream ifs1(path / "calib" / "T_applanix_dmu.txt", std::ios::in);
+    Eigen::Matrix4d T_applanix_dmu_mat;
+    if (!ifs1.is_open()) {
+      CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_dmu.txt. Loading preset.";
+      T_applanix_dmu_mat << 1.0,  0.0,  0.0,  0.0,
+                            0.0, -1.0,  0.0,  0.0,
+                            0.0,  0.0, -1.0, -0.15,
+                            0.0,  0.0,  0.0,  1.0;
+    } else {
+      for (size_t row = 0; row < 4; row++)
+        for (size_t col = 0; col < 4; col++) ifs1 >> T_applanix_dmu_mat(row, col);
+    }
+    // Extrinsic from applanix to rear axel
+    Eigen::Matrix4d T_axel_applanix;
+    // Want to estimate at rear axel
+    T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
+                      -0.99955003, 0.0299955, 0, 0.0,
+                       0, 0, 1, 1.45,
+                       0, 0, 0, 1;
+  
+    T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_axel_applanix * T_applanix_dmu_mat),
+                                Eigen::Matrix<double, 6, 6>::Zero());
+  } else if (imu_name == "aeva") {
+    std::ifstream ifs1(path / "calib" / "T_applanix_aeva.txt", std::ios::in);
+
+    Eigen::Matrix4d T_applanix_aeva_mat;
+    if (!ifs1.is_open()) {
+      CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_aeva.txt. Loading preset.";
+      T_applanix_aeva_mat << 0.0116474, -0.99998734, 0.0, -0.37043642,
+                             0.9999333, 0.0116284, 0.0, 0.39745466,
+                             0.0, 0.0, 1.0, -0.1032,
+                             0.0, 0.0, 0.0, 1.0;
+    } else {
+      for (size_t row = 0; row < 4; row++)
+        for (size_t col = 0; col < 4; col++) ifs1 >> T_applanix_aeva_mat(row, col);
+    }
+
+    CLOG(WARNING, "boreas_wrapper") << "T_applanix_aeva_mat: " << T_applanix_aeva_mat;
+
+    Eigen::Matrix4d T_imu_aeva_mat;
+    T_imu_aeva_mat << 1.0, 0.0, 0.0, -0.020,
+                      0.0, 1.0, 0.0, -0.023,
+                      0.0, 0.0, 1.0, 0.037,
+                      0.0, 0.0, 0.0, 1.0;
+
+    // Extrinsic from applanix to rear axel
+    Eigen::Matrix4d T_axel_applanix;
+    // Want to estimate at rear axel
+    T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
+                      -0.99955003, 0.0299955, 0, 0.0,
+                       0, 0, 1, 1.45,
+                       0, 0, 0, 1;
+  
+    T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_axel_applanix * T_applanix_aeva_mat *
+                                                T_imu_aeva_mat.inverse()),
+                                Eigen::Matrix<double, 6, 6>::Zero());
+
+  } else if (imu_name == "imu") {
+    // Extrinsic from applanix to applanix IMU
+    Eigen::Matrix4d T_imu_applanix;
+    // Rotate applanix 90 degrees about z axis and then 180 degrees about y axis
+    T_imu_applanix << 0, -1, 0, 0,
+                     -1, 0, 0, 0,
+                      0, 0, -1, 0,
+                      0, 0, 0, 1;
+
+    // Extrinsic from applanix to rear axel
+    Eigen::Matrix4d T_axel_applanix;
+    // Want to estimate at rear axel
+    T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
+                      -0.99955003, 0.0299955, 0, 0.0,
+                       0, 0, 1, 1.45,
+                       0, 0, 0, 1;
+  
+    T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_axel_applanix * T_imu_applanix.inverse()),
+                                Eigen::Matrix<double, 6, 6>::Zero());
+  } else {
+    CLOG(ERROR, "boreas_wrapper") << "Unknown IMU name: " << imu_name;
+    return EdgeTransform();
+  }
+  return T_robot_imu.inverse();
+}
+
 int main(int argc, char **argv) {
   // disable eigen multi-threading
   Eigen::setNbThreads(1);
-
-  std::string yaml_file_path = "external/boreas_vtr_wrapper/src/vtr_testing_aeva/config/aeva_boreas.yaml";
-  YAML::Node config = loadYamlFile(yaml_file_path);
-
-  // load options
-  int init_frame = 0;
-  int last_frame = 100000;
-  bool aeriesII = config["/**"]["ros__parameters"]["aeriesII"].as<bool>();
-
-  std::string sensor_config_path = config["/**"]["ros__parameters"]["preprocessing"]["doppler_filtering"]["root_path"].as<std::string>();
-  std::string model_name = config["/**"]["ros__parameters"]["preprocessing"]["doppler_filtering"]["model_name"].as<std::string>();
-
-  // Load const_gyro_bias from gyro_bias.txt
-  std::string gyro_bias_path = sensor_config_path + "/" + model_name + "/gyro_bias.txt";
-  std::ifstream bi_csv(gyro_bias_path);
-  Eigen::MatrixXd gbias_matrix = readCSVtoEigenXd(bi_csv);
-  std::vector<double> gbias(gbias_matrix.data(), gbias_matrix.data() + gbias_matrix.size());
-  std::vector<Eigen::Vector3d> const_gyro_bias;
-  for (int i = 0; i < gbias.size(); i += 3) {
-    const_gyro_bias.push_back(Eigen::Vector3d(gbias[i], gbias[i+1], gbias[i+2]));
-  }
-
-  std::string gyro_cov_path = sensor_config_path + "/" + model_name + "/gyro_cov.txt";
-  std::ifstream co_csv(gyro_cov_path);
-  std::vector<double> cov_arr;
-  if (co_csv.is_open()) {
-    std::string line;
-    std::getline(co_csv, line);
-    std::stringstream ss(line);
-    std::string value;
-    while (std::getline(ss, value, ',')) {
-      cov_arr.push_back(std::stod(value));
-    }
-  } else {
-    throw std::runtime_error("Unable to open gyro_cov file: " + gyro_cov_path);
-  }
-
-  // // use root path to config files, otherwise use this
-  // std::vector<Eigen::Vector3d> const_gyro_bias;
-  // const_gyro_bias.push_back(Eigen::Vector3d(0.008635376340014623,0.01223362178905661,0.006690176486531614));
-  // std::vector<double> cov_arr;
-  // cov_arr.push_back(1.09504535e-04);
-  // cov_arr.push_back(1.73659780e-04);
-  // cov_arr.push_back(5.01201833e-05);
-
-  std::cout << "const_gyro_bias: " << const_gyro_bias << std::endl;
-  std::cout << "cov_arr: " << cov_arr << std::endl;
-
-  Eigen::Matrix4d T_imu_lidar_mat;
-  T_imu_lidar_mat << 1.0, 0.0, 0.0, -0.020,
-                     0.0, 1.0, 0.0, -0.023,
-                     0.0, 0.0, 1.0, 0.037,
-                     0.0, 0.0, 0.0, 1.0;
 
   rclcpp::init(argc, argv);
   const std::string node_name = "boreas_localization_" + random_string(10);
@@ -497,18 +487,39 @@ int main(int argc, char **argv) {
   }
   configureLogging(log_filename, log_debug, log_enabled);
 
-  CLOG(WARNING, "test") << "Odometry Directory: " << odo_dir.string();
-  CLOG(WARNING, "test") << "Localization Directory: " << loc_dir.string();
-  CLOG(WARNING, "test") << "Output Directory: " << data_dir.string();
+  CLOG(WARNING, "boreas_wrapper") << "Odometry Directory: " << odo_dir.string();
+  CLOG(WARNING, "boreas_wrapper") << "Localization Directory: " << loc_dir.string();
+  CLOG(WARNING, "boreas_wrapper") << "Output Directory: " << data_dir.string();
 
   std::vector<std::string> parts;
   boost::split(parts, loc_dir_str, boost::is_any_of("/"));
   auto stem = parts.back();
   boost::replace_all(stem, "-", "_");
-  CLOG(WARNING, "test") << "Publishing status to topic: "
+  CLOG(WARNING, "boreas_wrapper") << "Publishing status to topic: "
                         << ("aeva_" + stem + "_lidar_localization");
   const auto status_publisher = node->create_publisher<std_msgs::msg::String>(
       "aeva_" + stem + "_lidar_localization", 1);
+
+  // Load IMU data
+  const auto use_imu = node->declare_parameter<bool>("boreas.use_imu", false);
+  const auto imu_name = node->declare_parameter<std::string>("boreas.imu_name", "dmu");
+  CLOG(WARNING, "boreas_wrapper") << "IMU enabled: " << use_imu;
+  std::vector<Eigen::MatrixXd> all_imu_meas;
+  EdgeTransform T_imu_robot; 
+  if (use_imu) {
+    // Check that imu name is one of "dmu", "aeva", "imu"
+    CLOG(WARNING, "boreas_wrapper") << "IMU name: " << imu_name;
+    if (imu_name != "dmu" && imu_name != "aeva" && imu_name != "imu") {
+      CLOG(ERROR, "boreas_wrapper") << "Unknown IMU name: " << imu_name;
+      return 1;
+    }
+    const auto imu_file_name = (imu_name == "imu") ? "imu_raw.csv" : (imu_name + "_imu.csv");
+    const auto imu_path = loc_dir / "applanix" / imu_file_name;
+    load_all_imu_meas(imu_path, all_imu_meas, imu_file_name);
+    T_imu_robot = load_T_imu_robot(loc_dir, imu_name);
+    CLOG(WARNING, "boreas_wrapper") << "Loaded " << all_imu_meas.size() << " IMU measurements";
+    CLOG(WARNING, "boreas_wrapper") << "Transform from IMU to robot has been set to:\n" << T_imu_robot;
+  }
 
   // Pose graph
   auto graph = tactic::Graph::MakeShared((data_dir / "graph").string(), true);
@@ -530,10 +541,53 @@ int main(int argc, char **argv) {
   tactic->setPipeline(PipelineMode::RepeatFollow);
   tactic->addRun();
 
+  // KTODO: move to preprocessing - maybe keep bias here and make cov a parameter
+  const auto sensor_config_path = node->declare_parameter<std::string>("boreas.root_path", "/home/");
+  const auto model_name = node->declare_parameter<std::string>("boreas.model_name", "glen");
+  const auto aeriesII = node->declare_parameter<bool>("boreas.aeriesII", false);
+
+  CLOG(WARNING, "boreas_wrapper") << "Sensor config path: " << sensor_config_path;
+  CLOG(WARNING, "boreas_wrapper") << "Model name: " << model_name;
+  CLOG(WARNING, "boreas_wrapper") << "Aeries II: " << aeriesII;
+
+  // Load const_gyro_bias from gyro_bias.txt
+  std::string gyro_bias_path = sensor_config_path + "/" + model_name + "/gyro_bias.txt";
+  std::ifstream bi_csv(gyro_bias_path);
+  Eigen::MatrixXd gbias_matrix = readCSVtoEigenXd(bi_csv);
+  std::vector<double> gbias(gbias_matrix.data(), gbias_matrix.data() + gbias_matrix.size());
+  std::vector<Eigen::Vector3d> const_gyro_bias;
+  for (int i = 0; i < gbias.size(); i += 3) {
+    const_gyro_bias.push_back(Eigen::Vector3d(gbias[i], gbias[i+1], gbias[i+2]));
+  }
+
+  CLOG(WARNING, "boreas_wrapper") << "Gyro bias: " << const_gyro_bias[0].transpose();
+
+  std::string gyro_cov_path = sensor_config_path + "/" + model_name + "/gyro_cov.txt";
+  std::ifstream co_csv(gyro_cov_path);
+  std::vector<double> cov_arr;
+  if (co_csv.is_open()) {
+    std::string line;
+    std::getline(co_csv, line);
+    std::stringstream ss(line);
+    std::string value;
+    while (std::getline(ss, value, ',')) {
+      cov_arr.push_back(std::stod(value));
+    }
+  } else {
+    CLOG(ERROR, "boreas_wrapper") << "Unable to open gyro_cov file: " + gyro_cov_path;
+  }
+
+  Eigen::Matrix3d gyro_invcov = Eigen::Matrix3d::Identity();
+  gyro_invcov(0,0) = 2.0/(cov_arr[0]);
+  gyro_invcov(1,1) = 2.0/(cov_arr[1]);
+  gyro_invcov(2,2) = 2.0/(cov_arr[2]);
+
+  CLOG(WARNING, "boreas_wrapper") << "Gyro cov: " << cov_arr[0] << ", " << cov_arr[1] << ", " << cov_arr[2];
+
   // Get the path that we should repeat
   VertexId::Vector sequence;
   sequence.reserve(graph->numberOfVertices());
-  CLOG(WARNING, "test") << "Total number of vertices: "
+  CLOG(WARNING, "boreas_wrapper") << "Total number of vertices: "
                         << graph->numberOfVertices();
   // Extract the privileged sub graph from the full graph.
   using LocEvaluator = tactic::PrivilegedEvaluator<tactic::GraphBase>;
@@ -546,19 +600,19 @@ int main(int argc, char **argv) {
     ss << it->v()->id() << " ";
     sequence.push_back(it->v()->id());
   }
-  CLOG(WARNING, "test") << ss.str();
+  CLOG(WARNING, "boreas_wrapper") << ss.str();
 
   /// NOTE: odometry is teach, localization is repeat
   auto T_loc_odo_init = [&]() {
     const auto T_enu_lidar_odo = load_T_enu_lidar_init(odo_dir);
     const auto T_enu_lidar_loc = load_T_enu_lidar_init(loc_dir);
 
-    const auto T_lidar_robot = load_T_lidar_robot(aeriesII); // T_s_v
+    const auto T_lidar_robot = load_T_lidar_robot(loc_dir, aeriesII); // T_s_v
 
     return T_lidar_robot.inverse() * T_enu_lidar_loc.inverse() * T_enu_lidar_odo * T_lidar_robot;
   }();
   T_loc_odo_init.setCovariance(Eigen::Matrix<double, 6, 6>::Identity());
-  CLOG(WARNING, "test")
+  CLOG(WARNING, "boreas_wrapper")
       << "Transform from localization to odometry has been set to "
       << T_loc_odo_init.vec().transpose();
 
@@ -568,16 +622,13 @@ int main(int argc, char **argv) {
   std::string robot_frame = "robot";
   std::string lidar_frame = "lidar";
   
-  const auto T_lidar_robot = load_T_lidar_robot(aeriesII);
-  CLOG(WARNING, "test") << "Transform from " << robot_frame << " to "
+  const auto T_lidar_robot = load_T_lidar_robot(loc_dir, aeriesII);
+  CLOG(WARNING, "boreas_wrapper") << "Transform from " << robot_frame << " to "
                         << lidar_frame << " has been set to" << T_lidar_robot;
 
   std::string dir_path_ = loc_dir.string() + "/aeva/";
   std::vector<std::string> filenames_;
-  int64_t first_state_time_micro_;
-  int init_frame_ = 0;
-  int curr_frame_ = 0;
-  int last_frame_ = std::numeric_limits<int>::max();  // exclusive bound
+  int64_t first_state_time;
 
   auto dir_iter = std::filesystem::directory_iterator(dir_path_);
   std::count_if(begin(dir_iter), end(dir_iter), [&filenames_](auto &entry) {
@@ -586,30 +637,7 @@ int main(int argc, char **argv) {
   });
   std::sort(filenames_.begin(), filenames_.end(), filecomp);  // custom comparison
 
-  last_frame_ = std::min(last_frame_, last_frame);
-  curr_frame_ = std::max((int)0, init_frame);
-  init_frame_ = std::max((int)0, init_frame);
-
-  first_state_time_micro_ = std::stoll(filenames_[0].substr(0, filenames_[0].find(".")));
-
-  // Gyroscope data
-  // initialize gyro
-  Eigen::MatrixXd gyro_data_;
-  std::vector<int64_t> gyro_stamps;
-  std::string gyro_path = loc_dir.string() + "/applanix/" + "aeva_imu.csv";
-  if (aeriesII) {
-    // load Aeries II boreas gyro
-    gyro_data_ = readGyroToEigenXd(gyro_path, first_state_time_micro_, "aevaII_boreas");
-    // gyro_data_.rightCols<3>() *= -1.0; // flip reference frame
-  } else {
-    // load Aeries I boreas gyro
-    gyro_data_ = readGyroToEigenXd(gyro_path, first_state_time_micro_, "aevaI_boreas");
-  }
-
-  Eigen::Matrix3d gyro_invcov = Eigen::Matrix3d::Identity();
-  gyro_invcov(0,0) = 2.0/(cov_arr[0]);
-  gyro_invcov(1,1) = 2.0/(cov_arr[1]);
-  gyro_invcov(2,2) = 2.0/(cov_arr[2]);
+  first_state_time = std::stoll(filenames_[0].substr(0, filenames_[0].find("."))) * 1000; // convert to nanosec
 
   auto tf_sbc = std::make_shared<tf2_ros::StaticTransformBroadcaster>(node);
   auto msg =
@@ -626,7 +654,9 @@ int main(int argc, char **argv) {
   for (const auto &dir_entry : fs::directory_iterator{loc_dir / "aeva"})
     if (!fs::is_directory(dir_entry)) files.push_back(dir_entry);
   std::sort(files.begin(), files.end());
-  CLOG(WARNING, "test") << "Found " << files.size() << " lidar data";
+  CLOG(WARNING, "boreas_wrapper") << "Found " << files.size() << " lidar data";
+  const auto start_frame = node->declare_parameter<int>("odometry.start_frame", 0);
+  const auto end_frame = node->declare_parameter<int>("odometry.end_frame", -1);
 
   // thread handling variables
   TestControl test_control(node);
@@ -637,6 +667,7 @@ int main(int argc, char **argv) {
 
   // main loop
   int frame = 0;
+  int imu_counter = 0;
   auto it = files.begin();
   while (it + 1 != files.end()) {
     if (!rclcpp::ok()) break;
@@ -646,20 +677,28 @@ int main(int argc, char **argv) {
     std::this_thread::sleep_for(
         std::chrono::milliseconds(test_control.delay()));
 
-    const auto filename = getStampFromPath((it)->path().string());
-    int64_t time_delta_micro = filename / 1000 - first_state_time_micro_;
-    double start_time = static_cast<double>(time_delta_micro) / 1e6;
+    if (frame < start_frame) {
+      ++it;
+      ++frame;
+      continue;
+    } else if (end_frame > 0 && frame > end_frame) {
+      break;
+    }
 
-    std::cout << "Frame " << frame << " with timestamp " << filename << std::endl;
+    const auto filename = getStampFromPath((it)->path().string());
+    int64_t time_delta_micro = filename - first_state_time;
+    double start_time = static_cast<double>(time_delta_micro) / 1e9;
+
+    CLOG(WARNING, "boreas_wrapper") << "Loading aeva frame " << frame << " with timestamp " << filename;
 
     // Note: we peak into future data for the end timestamp for evaluation convenience. An online implementation
     // would need different logic, i.e., use the last timestamp of the pointcloud
     double end_time = start_time + 0.1;
     // Get the name of the next file
-    int64_t next_file_name;
+    int64_t next_state_time;
     if ((it + 1) != files.end()) {
-      next_file_name = getStampFromPath((it + 1)->path().string());
-      auto end_time = static_cast<double>(next_file_name - first_state_time_micro_) / 1e6;
+      next_state_time = getStampFromPath((it + 1)->path().string());
+      auto end_time = static_cast<double>(next_state_time - first_state_time) / 1e9;
     }
     int64_t start_name = filename;
     
@@ -675,47 +714,46 @@ int main(int argc, char **argv) {
     }
 
     if (points.rows() == 0) {
-      CLOG(WARNING, "test") << "No points found in frame " << frame;
+      CLOG(WARNING, "boreas_wrapper") << "No points found in frame " << frame;
       ++it;
       ++frame;
       continue;
-    }
-
-    // load gyro data
-    Eigen::MatrixXd current_gyro;
-    std::vector<int64_t> gyro_timestamps;
-    std::vector<int> inds;
-    for (int r = 0; r < gyro_data_.rows(); ++r) {
-      double meas_time = gyro_data_(r, 1) - dt;
-      if (meas_time >= start_time && meas_time < end_time)
-        inds.push_back(r);
-    } // end for r
-
-    if (inds.size() == 0) {
-      // no measurements
-      current_gyro = Eigen::Matrix<double, 1, 1>();  // 1x1 zero matrix
-    } else {
-      current_gyro.resize(inds.size(), 4);
-      for (int r = 0; r < inds.size(); ++r) {
-        gyro_timestamps.push_back(gyro_data_(inds[r], 0) * 1000);
-        current_gyro(r, 0) = gyro_data_(inds[r], 1) - dt; // timestamp
-        current_gyro.row(r).rightCols<3>() = gyro_data_.row(inds[r]).rightCols<3>();
-        current_gyro.row(r).rightCols<3>() += const_gyro_bias[0].transpose();  // apply gyro bias
-      }
-    }
-
-    // Check that current gyro and gyro_timestamps are the same size
-    if (current_gyro.rows() != gyro_timestamps.size()) {
-      CLOG(WARNING, "test") << "current_gyro size: " << current_gyro.rows() << " gyro_timestamps size: " << gyro_timestamps.size();
-
-      current_gyro = Eigen::MatrixXd();
-      gyro_timestamps = std::vector<int64_t>();
     }
 
     // publish clock for sim time
     auto time_msg = rosgraph_msgs::msg::Clock();
     time_msg.clock = rclcpp::Time(start_name);
     clock_publisher->publish(time_msg);
+
+    // load gyro data
+    std::vector<sensor_msgs::msg::Imu> gyro_msgs;
+    // Feed in IMU data if available/desired
+    if (use_imu) {
+      int64_t timestamp_imu = all_imu_meas[imu_counter](0);
+      int64_t start_timestamp = points(0, 5) / 1000;
+      int64_t end_timestamp = points(points.rows() - 1, 5) / 1000;
+
+      if (imu_counter == 0) {
+        // Find IMU measurement right before radar frame to initialize
+        while (all_imu_meas[imu_counter](0) < start_timestamp) {
+          ++imu_counter;
+        }
+      }
+
+      // Loop through all IMU measurements from previous one to end of current radar frame
+      // This captures IMU measurements that are between frames
+      Eigen::Matrix<double, 4, 1> imu_meas;
+      while (imu_counter < all_imu_meas.size() && all_imu_meas[imu_counter](0) < end_timestamp) {
+        auto gyro_msg = sensor_msgs::msg::Imu();
+        gyro_msg.angular_velocity.x = all_imu_meas[imu_counter](1) + const_gyro_bias[0](0);
+        gyro_msg.angular_velocity.y = all_imu_meas[imu_counter](2) + const_gyro_bias[0](1);
+        gyro_msg.angular_velocity.z = all_imu_meas[imu_counter](3) + const_gyro_bias[0](2);
+        int64_t timestamp = all_imu_meas[imu_counter](0);
+        gyro_msg.header.stamp = rclcpp::Time(timestamp * 1000);
+        gyro_msgs.push_back(gyro_msg);
+        ++imu_counter;
+      }
+    }
 
     // Convert message to query_data format and store into query_data
     auto query_data = std::make_shared<lidar::LidarQueryCache>();
@@ -736,23 +774,20 @@ int main(int argc, char **argv) {
 
     // fill in the vehicle to sensor transform and frame name
     query_data->T_s_r.emplace(T_lidar_robot);
-    query_data->T_s_r_gyro.emplace(T_imu_lidar_mat * T_lidar_robot);
 
-    // set gyro data
-    query_data->gyro.emplace(prev_gyro);
-    query_data->gyro_stamp.emplace(prev_gyro_timestamps);
-    query_data->gyro_invcov.emplace(gyro_invcov);
+    // set gyro messages
+    if (gyro_msgs.size() > 0) {
+      CLOG(WARNING, "boreas_wrapper") << "Loaded " << gyro_msgs.size() << " gyro measurements";
+      query_data->T_s_r_gyro.emplace(T_imu_robot);
+      query_data->gyro_msgs.emplace(gyro_msgs);
+      query_data->gyro_invcov.emplace(gyro_invcov);
+    }
 
-    // Update previous gyro data and timestamps
-    prev_gyro = current_gyro;
-    prev_gyro_timestamps = gyro_timestamps;
-
-    // TO DO: convert these to be same units as frame timestamp
-    // set timestamp of first frame [us]
-    query_data->first_state_time.emplace(first_state_time_micro_);
+    // set timestamp of first frame [ns]
+    query_data->first_state_time.emplace(first_state_time);
 
     // set timestamp of next state [ns]
-    query_data->next_state_time.emplace(next_file_name);
+    query_data->next_state_time.emplace(next_state_time);
 
     // execute the pipeline
     tactic->input(query_data);
@@ -773,8 +808,8 @@ int main(int argc, char **argv) {
   callback.reset();
   pipeline.reset();
   pipeline_factory.reset();
-  CLOG(WARNING, "test") << "Saving pose graph and reset.";
+  CLOG(WARNING, "boreas_wrapper") << "Saving pose graph and reset.";
   graph->save();
   graph.reset();
-  CLOG(WARNING, "test") << "Saving pose graph and reset. - DONE!";
+  CLOG(WARNING, "boreas_wrapper") << "Saving pose graph and reset. - DONE!";
 }

@@ -9,7 +9,7 @@ ODO_INPUT=$1
 echo "Evaluating localization to reference sequence ${ODO_INPUT}, storing result to ${VTRRRESULT}/${ODO_INPUT}"
 
 # Source the VTR environment with the testing package
-source ${VTRRROOT}/install/setup.bash
+source ${VTRRROOT}/src/install/setup.bash
 source ${VTRROOT}/venv/bin/activate
 
 #   - dump localization result to boreas expected format (txt file)

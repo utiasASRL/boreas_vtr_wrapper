@@ -1,0 +1,55 @@
+logging:
+  log_to_screen: true
+  log_dir: /home/dl/Documents/phd/dev/doppler_radar/doppler_radar_cpp/results/logs
+  min_log_level: 0  # 0: info, 1: warning, 2: error, 3: fatal
+
+radar:
+  radar_res: 0.04381 # m/pixel, radar resolution
+  f_t: 76.04E9    # Hz, start frequency ramp
+  meas_freq: 1600.0 # Hz, number of measurements per second
+  del_f: 893.0E6  # Hz, frequency span during ramp
+
+extraction:
+  signal:
+    min_range: 4    # m, minimum range of signal to use in cross-correlation
+    max_range: 200  # m, maximum range of signal to use in cross-correlation
+    beta_corr_fact: 0.944 # _, correction factor for beta
+    pad_num: 100     # _, number of zeros to pad the signal with
+
+  ransac:
+    vel_dim: 2.0  # 1 or 2 depending on if you want to use forward or forward/side velocity for ransac
+    max_iter: 100
+    threshold: 6.0
+    prior_threshold: 6.0
+
+  filter:
+    sigma_gauss: 15 # _, standard deviation of Gaussian filter
+    z_q: 2.5       # _, threshold for Cen2018 detector
+
+odometry:
+  optimization:
+    vel_dim: 2  # 1 or 2 depending on if you want to solve for forward or forward/side velocity
+    max_iter: 100
+    threshold: 1.0E-6
+    cauchy_rho: 0.8
+    trim_dist: 1000.0
+    use_bias_correction: true # whether to apply bias correction or not
+    x_bias_slope: -0.009 # m/s, slope of the bias correction in x direction
+    x_bias_intercept: 0.10 # m/s, intercept of the bias correction in x direction
+    y_bias_slope: 0.046 # m/s, slope of the bias correction in y direction
+    y_bias_intercept: -0.11 # m/s, intercept of the bias correction in y direction
+
+  ic:
+    varpi_0:
+      x: 0.0  # m/s, x component of the initial condition
+      y: 0.0  # m/s, y component of the initial condition
+    varpi_0_std:
+      x: 0.1  # m/s, std of x component of the initial condition
+      y: 0.1  # m/s, std of y component of the initial condition
+  
+  noise:
+    wnoa:
+      x: 1.0  # m/s, x component of the white noise on accleleration assumption
+      y: 0.5  # m/s, y component of the white noise on accleleration assumption
+    meas_std: 0.6 # m/s, std of the azimuth velocity measurement noise
+    rear_axel_std: 0.05 # m/s, std of the rear axel side velocity velocity pseudo-measurement

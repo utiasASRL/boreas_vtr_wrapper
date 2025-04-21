@@ -51,28 +51,37 @@ class BagFileParser():
     return [(timestamp, deserialize_message(data, self.topic_msg_message[topic_name])) for timestamp, data in rows]
 
 
-def main(dataset_dir, result_dir, sensor_type, input_loc_dir):
+def main(dataset_dir, result_dir, input_loc_dir):
   result_dir = osp.normpath(result_dir)
   odo_input = osp.basename(result_dir)
-  loc_inputs = [i for i in os.listdir(result_dir) if (i != odo_input and i.startswith("20") and i == input_loc_dir)]
+
+  loc_inputs = [i for i in os.listdir(result_dir) if (i != odo_input and i.startswith("boreas"))]
   loc_inputs.sort()
+
+  if input_loc_dir in loc_inputs:
+    loc_inputs = [input_loc_dir]
+
   print("Result Directory:", result_dir)
   print("Odometry Run:", odo_input)
   print("Localization Runs:", loc_inputs)
   print("Dataset Directory:", dataset_dir)
   
-  if sensor_type == "aevaii_boreas":
-    T_sr = np.array([[ 0.99982945,  0.01750912,  0.00567659, -1.03971349],
-                     [-0.01754661,  0.99973757,  0.01034526, -0.38788971],
-                     [-0.00549427, -0.01044368,  0.99993037, -1.69798033],
-                     [ 0, 0, 0, 1]]).astype(np.float64)
-  elif sensor_type == "aeva_boreas":
-    T_sr = np.array([[ 0.9999366830849237,    0.008341717781538466,   0.0075534496251198685, -1.0119098938516395],
-                     [-0.008341717774127972,  0.9999652112886684,    -3.150635091210066e-05, -0.3965882433517194],
-                     [-0.007553449599178521, -3.1504388681967066e-05, 0.9999714717963843,    -1.6970000000000010],
-                     [0, 0, 0, 1]]).astype(np.float64)
-  else:
-    raise ValueError("Unknown sensor type: ", sensor_type)
+  # # Aeries II sensor to rear axle transform
+  # T_sr = np.array([[ 0.99982945,  0.01750912,  0.00567659, -1.03971349],
+  #                   [-0.01754661,  0.99973757,  0.01034526, -0.38788971],
+  #                   [-0.00549427, -0.01044368,  0.99993037, -1.69798033],
+  #                   [ 0, 0, 0, 1]]).astype(np.float64)
+
+  # # Aeries I sensor to rear axle transform
+  # T_sr = np.array([[ 0.9999366830849237,    0.008341717781538466,   0.0075534496251198685, -1.0119098938516395],
+  #                   [-0.008341717774127972,  0.9999652112886684,    -3.150635091210066e-05, -0.3965882433517194],
+  #                   [-0.007553449599178521, -3.1504388681967066e-05, 0.9999714717963843,    -1.6970000000000010],
+  #                   [0, 0, 0, 1]]).astype(np.float64)
+  
+  T_ax_app = np.array([[ 0.0299955,  0.99955003,  0, 0.51],
+                       [-0.99955003,  0.0299955,  0, 0.0],
+                       [ 0, 0, 1, 1.45],
+                       [ 0, 0, 0, 1]]).astype(np.float64)
   
   # dataset directory and necessary sequences to load
   dataset_odo = BoreasDataset(osp.normpath(dataset_dir), [[odo_input]])
@@ -82,8 +91,9 @@ def main(dataset_dir, result_dir, sensor_type, input_loc_dir):
   for sequence in dataset_odo.sequences:
     # Ground truth is provided w.r.t sensor, so we set sensor to vehicle transform 
     # New way using rear axle
-    T_lidar_robot_odo = T_sr
-    T_robot_lidar_odo = get_inverse_tf(T_lidar_robot_odo)
+    T_app_aeva = sequence.calib.T_applanix_aeva
+    T_robot_lidar_odo = T_ax_app @ T_app_aeva
+    T_lidar_robot_odo = get_inverse_tf(T_robot_lidar_odo)
 
     # build dictionary
     precision = 1e7  # divide by this number to ensure always find the timestamp
@@ -94,6 +104,7 @@ def main(dataset_dir, result_dir, sensor_type, input_loc_dir):
   for i, loc_input in enumerate(loc_inputs):
 
     save_loc_input = loc_input
+    # want to keep thresholding information to rename saved files later
     if '_threshold_' in loc_input:
       loc_input = loc_input.split('_threshold_')[0]
 
@@ -107,8 +118,9 @@ def main(dataset_dir, result_dir, sensor_type, input_loc_dir):
     for sequence in dataset_loc.sequences:
       # Ground truth is provided w.r.t sensor, so we set sensor to vehicle transform
       # New way using rear axle
-      T_lidar_robot_loc = T_sr
-      T_robot_lidar_loc = get_inverse_tf(T_lidar_robot_loc)
+      T_app_aeva = sequence.calib.T_applanix_aeva
+      T_robot_lidar_loc = T_ax_app @ T_app_aeva
+      T_lidar_robot_loc = get_inverse_tf(T_robot_lidar_loc)
 
       # build dictionary
       precision = 1e7  # divide by this number to ensure always find the timestamp
@@ -143,10 +155,10 @@ def main(dataset_dir, result_dir, sensor_type, input_loc_dir):
       result.append([test_seq_timestamp, map_seq_timestamp] + T_map_test_in_lidar_res)
 
       if not int(message[1].timestamp / precision) in ground_truth_poses_loc.keys():
-        print("WARNING: time stamp not found 1: ", int(message[1].timestamp / precision))
+        print("WARNING: timestamp not found: ", int(message[1].timestamp))
         continue
       if not int(message[1].vertex_timestamp / precision) in ground_truth_poses_odo.keys():
-        print("WARNING: time stamp not found 2: ", int(message[1].vertex_timestamp / precision))
+        print("WARNING: vertex timestamp not found: ", int(message[1].vertex_timestamp))
         continue
 
       test_seq_timestamp = int(message[1].timestamp / precision)
@@ -160,9 +172,9 @@ def main(dataset_dir, result_dir, sensor_type, input_loc_dir):
       # compute error
       errors[i, :] = se3op.tran2vec(T_map_test_in_lidar @ T_test_map_in_lidar_gt).flatten()
 
-    print(np.mean(np.abs(errors), axis=0))
+    print("err mean: ", np.mean(np.abs(errors), axis=0))
     errors[:, 3:] = np.rad2deg(errors[:, 3:])
-    print(np.sqrt(np.mean(np.power(errors, 2), axis=0)))
+    print("err eval: ", np.sqrt(np.mean(np.power(errors, 2), axis=0)))
 
     output_dir = osp.join(result_dir, "localization_result")
     os.makedirs(output_dir, exist_ok=True)
@@ -170,11 +182,12 @@ def main(dataset_dir, result_dir, sensor_type, input_loc_dir):
       writer = csv.writer(file, delimiter=' ')
       writer.writerows(result)
       print("Written to file:", osp.join(output_dir, save_loc_input + ".txt"))
-      
+
+  # Option to save velocity results    
   if True:
-    bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "odometry_vel_result")
+    bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "repeat_odometry_vel_result")
     parser = BagFileParser(bag_file)
-    messages = parser.get_bag_messages("odometry_vel_result")
+    messages = parser.get_bag_messages("repeat_odometry_vel_result")
 
     vel_results = []
     for _, message in enumerate(messages):
@@ -200,8 +213,6 @@ def main(dataset_dir, result_dir, sensor_type, input_loc_dir):
       writer.writerows(vel_results)
       print("Written to file:", osp.join(output_dir, save_loc_input + "_vel.txt"))
 
-
-
 if __name__ == "__main__":
 
   parser = argparse.ArgumentParser()
@@ -211,9 +222,8 @@ if __name__ == "__main__":
   # <rosbag name>/<rosbag name>_0.db3
   parser.add_argument('--dataset', default=os.getcwd(), type=str, help='path to boreas dataset (contains boreas-*)')
   parser.add_argument('--path', default=os.getcwd(), type=str, help='path to vtr folder (default: os.getcwd())')
-  parser.add_argument('--type', default=os.getcwd(), type=str, help='dataset type (which sensor?)')
   parser.add_argument('--input_loc_dir', default=os.getcwd(), type=str, help='input localization directory')
 
   args = parser.parse_args()
 
-  main(args.dataset, args.path, args.type, args.input_loc_dir)
+  main(args.dataset, args.path, args.input_loc_dir)
