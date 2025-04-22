@@ -451,8 +451,8 @@ int main(int argc, char **argv) {
       "aeva_" + stem + "_lidar_odometry", 1);
 
   // Load IMU data
-  const auto use_imu = node->declare_parameter<bool>("boreas.use_imu", false);
-  const auto imu_name = node->declare_parameter<std::string>("boreas.imu_name", "aeva");
+  const auto use_imu = node->declare_parameter<bool>("boreas.imu.use_imu", false);
+  const auto imu_name = node->declare_parameter<std::string>("boreas.imu.imu_name", "aeva");
   CLOG(WARNING, "boreas_wrapper") << "IMU enabled: " << use_imu;
   std::vector<Eigen::MatrixXd> all_imu_meas;
   EdgeTransform T_imu_robot; 
@@ -571,8 +571,8 @@ int main(int argc, char **argv) {
     if (!fs::is_directory(dir_entry)) files.push_back(dir_entry);
   std::sort(files.begin(), files.end());
   CLOG(WARNING, "boreas_wrapper") << "Found " << files.size() << " lidar data";
-  const auto start_frame = node->declare_parameter<int>("boreas.start_frame", 0);
-  const auto end_frame = node->declare_parameter<int>("boreas.end_frame", -1);
+  const auto start_frame = node->declare_parameter<int>("boreas.odometry.start_frame", 0);
+  const auto end_frame = node->declare_parameter<int>("boreas.odometry.end_frame", -1);
 
   // thread handling variables
   TestControl test_control(node);

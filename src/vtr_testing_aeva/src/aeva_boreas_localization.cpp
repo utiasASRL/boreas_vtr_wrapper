@@ -501,8 +501,8 @@ int main(int argc, char **argv) {
       "aeva_" + stem + "_lidar_localization", 1);
 
   // Load IMU data
-  const auto use_imu = node->declare_parameter<bool>("boreas.use_imu", false);
-  const auto imu_name = node->declare_parameter<std::string>("boreas.imu_name", "dmu");
+  const auto use_imu = node->declare_parameter<bool>("boreas.imu.use_imu", false);
+  const auto imu_name = node->declare_parameter<std::string>("boreas.imu.imu_name", "dmu");
   CLOG(WARNING, "boreas_wrapper") << "IMU enabled: " << use_imu;
   std::vector<Eigen::MatrixXd> all_imu_meas;
   EdgeTransform T_imu_robot; 

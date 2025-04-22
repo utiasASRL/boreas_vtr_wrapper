@@ -25,17 +25,17 @@
         # "lidar.localization_map_recall",
         # "lidar.localization_icp",
       ]
-    
-    boreas: 
+    ############ boreas data configuration ############
+    boreas:
       aeriesII: true
       root_path: "/home/katya/Documents/Data/sensor_config/boreas_aeries_ii"  # point this to where we find the trained sensor model
       model_name: "glen"
-      #
-      use_imu: true
-      imu_name: "aeva"
-      #
-      start_frame: 0 
-      end_frame: -1 # -1 means process all frames
+      imu:
+        use_imu: true
+        imu_name: "aeva" # options are "dmu", "aeva", or "imu" (for applanix imu)
+      odometry:
+        start_frame: 0  # start frame for odometry
+        end_frame: -1   # -1 means process all frames
 
     ############ tactic configuration ############
     tactic:
