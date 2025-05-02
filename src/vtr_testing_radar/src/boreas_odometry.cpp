@@ -366,6 +366,9 @@ int main(int argc, char **argv) {
       query_data->gyro_msgs.emplace(gyro_msgs);
     }
 
+    // Add sequence name to query data
+    query_data->seq_name = stem;
+
     // execute the pipeline
     tactic->input(query_data);
 
