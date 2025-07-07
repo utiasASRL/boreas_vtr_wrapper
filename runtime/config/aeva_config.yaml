@@ -202,7 +202,6 @@
 
         # thresholds
         min_matched_ratio: 0.0
-
         max_trans_diff: 1000.0
         max_trans_vel_diff: 1000.0
 
