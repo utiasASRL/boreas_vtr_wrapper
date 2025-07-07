@@ -653,6 +653,9 @@ int main(int argc, char **argv) {
       query_data->wheel_meas.emplace(wheel_meas);
     }
     
+    // Add sequence name to query data
+    query_data->seq_name = stem;
+
     // execute the pipeline
     tactic->input(query_data);
 
