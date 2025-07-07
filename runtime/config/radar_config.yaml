@@ -18,10 +18,11 @@
         "radar.conversion",
         "radar.preprocessing",
         # "radar.mcransac",
-        # "radar.odometry_icp",
+        "radar.odometry_icp",
+        "radar.odometry_wheel",
         # "radar.vertex_test",
         # "radar.localization_map_recall",
-        # "radar.localization_icp",
+        "radar.localization_icp",
       ]
 
     ############ Boreas data configuration ############
@@ -30,11 +31,14 @@
       imu:
         use_imu: true
         imu_name: "dmu" # options are "dmu", "aeva", or "imu" (for applanix imu)
+      wheel_encoder:
+        use_wheel_encoder: true
+        encoder_max: 16777216 # 2^24
       odometry:
         start_frame: 0  # start frame for odometry
         end_frame: -1   # -1 means process all frames
       localization:
-        reverse: false   # Whether to localize against a reversed map
+        reverse: false  # Whether to localize against a reversed map
 
     ############ tactic configuration ############
     tactic:
@@ -74,7 +78,8 @@
       odometry: [
           # odometry and mapping thread modules
           # "mcransac",
-          "icp",
+          # "icp",
+          "wheel",
           "mapping",
           "vertex_test",
           "memory",
@@ -98,7 +103,7 @@
       conversion:
         type: radar.offline_converter
         cart_resolution: 0.2384 # m/pixel of BEV Cartesian radar image
-        radar_resolution: 0.0596 #0.0596, 0.0438
+        radar_resolution: 0.0438 # before Oct. 2021 use 0.0596, after use 0.0438
         cartesian_maxr: 80.0 # maximum cartesian visualization distance
       extraction:
         type: radar.pc_extractor
@@ -126,7 +131,7 @@
       filtering:
         type: radar.preprocessing
 
-        num_threads: 1 # number of threads for nearest neighbor search
+        num_threads: 10 # number of threads for nearest neighbor search
 
         voxel_downsample: false
         frame_voxel_size: 1.0 # grid size for frame voxelization in meters
@@ -202,6 +207,21 @@
 
         # threshold
         min_matched_ratio: 0.0
+
+        visualize: false
+
+      wheel:
+        type: radar.odometry_wheel
+
+        num_threads: 10
+
+        # wheel odometry parameters       
+        potentially_slipping: true
+        estimate_bias: true
+        bias_alpha: 0.005
+        min_time_bias_count: 200.0   # 1 / median time diff between IMU measurements (applanix ~200Hz)
+        wheel_parameter: 0.00052201 # 0.00052229 
+        wheel_cov: [0.001, 0.001, 0.001, 1e-7, 1e-7, 1e-7]
 
         visualize: false
 

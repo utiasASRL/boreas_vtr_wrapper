@@ -28,7 +28,10 @@
     boreas:
       imu:
         use_imu: true
-        imu_name: "aeva" # options are "dmu", "aeva", or "imu" (for applanix imu)
+        imu_name: "dmu" # options are "dmu", "aeva", or "imu" (for applanix imu)
+      wheel_encoder:
+        use_wheel_encoder: true
+        encoder_max: 16777216 # 2^24
       odometry:
         start_frame: 0  # start frame for odometry
         end_frame: -1   # -1 means process all frames
@@ -71,7 +74,8 @@
 
       odometry: [
           # odometry and mapping thread modules
-          "icp",
+          # "icp",
+          "wheel",
           "mapping",
           "vertex_test",
           "memory",
@@ -154,6 +158,21 @@
         min_matched_ratio: 0.0
         max_trans_diff: 1000.0
         max_trans_vel_diff: 1000.0
+
+        visualize: false
+
+      wheel:
+        type: lidar.odometry_wheel
+
+        num_threads: 10
+
+        # wheel odometry parameters       
+        potentially_slipping: true
+        estimate_bias: true
+        bias_alpha: 0.005
+        min_time_bias_count: 200.0   # 1 / median time diff between IMU measurements (applanix ~200Hz)
+        # wheel_parameter: 0.00052229 
+        wheel_parameter: 0.00052201
 
         visualize: false
 

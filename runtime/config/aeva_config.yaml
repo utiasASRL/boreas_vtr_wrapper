@@ -34,6 +34,9 @@
         use_imu: true
         imu_name: "aeva" # options are "dmu", "aeva", or "imu" (for applanix imu)
         bias: [0.0, 0.0, 0.0] # gyro bias
+      wheel_encoder:
+        use_wheel_encoder: false
+        encoder_max: 16777216 # 2^24
       odometry:
         start_frame: 0  # start frame for odometry
         end_frame: -1   # -1 means process all frames

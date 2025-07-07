@@ -502,6 +502,69 @@ EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name
   return T_robot_imu.inverse();
 }
 
+EdgeTransform load_T_wheel_robot(const fs::path &path) {
+  std::ifstream ifs2(path / "calib" / "T_applanix_wheel.txt", std::ios::in);
+  Eigen::Matrix4d T_applanix_wheel_mat;
+  for (size_t row = 0; row < 4; row++)
+    for (size_t col = 0; col < 4; col++) ifs2 >> T_applanix_wheel_mat(row, col);
+
+  // Extrinsic from wheel to rear axel
+  Eigen::Matrix4d T_axel_applanix;
+  // Want to estimate at rear axel
+  T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
+                    -0.99955003, 0.0299955, 0, 0.0,
+                     0, 0, 1, 1.45,
+                     0, 0, 0, 1;      
+
+  Eigen::Matrix4d yfwd2xfwd;
+  yfwd2xfwd << 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1;
+
+  EdgeTransform T_wheel_robot(Eigen::Matrix4d(yfwd2xfwd * (T_axel_applanix * T_applanix_wheel_mat).inverse()),
+                              Eigen::Matrix<double, 6, 6>::Zero());
+  
+  return T_wheel_robot;
+}
+
+void load_wheel_encoder_data(const fs::path &path, const int encoder_max, std::vector<std::pair<int64_t, int64_t>> &all_wheel_meas) {
+  std::ifstream wheel_stream(path / "applanix" / "dmi.csv", std::ios::in);
+  // Get rid of header (GPSTime,pulse_count)
+  std::string header;
+  std::getline(wheel_stream, header);
+  // Loop over all wheel measurements
+  std::string curr_wheel_meas;
+  std::vector<int64_t> timestamps;
+  std::vector<int64_t> pulse_counts;
+  while (std::getline(wheel_stream, curr_wheel_meas)) {
+    std::stringstream ss(curr_wheel_meas);
+    std::string time_str, pulse_str;
+    
+    std::getline(ss, time_str, ',');
+    std::getline(ss, pulse_str, ',');
+
+    int64_t timestamp = stringToNanoseconds(time_str);
+    int64_t pulse_count = std::stoll(pulse_str);
+
+    timestamps.push_back(timestamp);
+    pulse_counts.push_back(pulse_count);
+  }
+
+  // Handle encoder wrap-around
+  int64_t offset = 0;
+  std::vector<int64_t> adjusted_counts = pulse_counts;
+  for (size_t i = 1; i < pulse_counts.size(); ++i) {
+    int64_t diff_count = std::abs(pulse_counts[i] - pulse_counts[i - 1]);
+    if (diff_count > (encoder_max / 2)) {
+      offset += encoder_max; // forward roll over
+    }
+    adjusted_counts[i] += offset;
+  }
+
+  all_wheel_meas.reserve(timestamps.size());
+  for (size_t i = 0; i < timestamps.size(); ++i) {
+    all_wheel_meas.emplace_back(std::pair(timestamps[i], adjusted_counts[i]));
+  }
+}
+
 int main(int argc, char **argv) {
   // disable eigen multi-threading
   Eigen::setNbThreads(1);
@@ -584,6 +647,21 @@ int main(int argc, char **argv) {
     CLOG(WARNING, "boreas_wrapper") << "Computed gyro bias from first " << imu_count
                     << " IMU measurements: " << gyro_bias.transpose();
 
+  }
+
+  // Load wheel encoder data
+  const auto use_wheel_encoder = node->declare_parameter<bool>("boreas.wheel_encoder.use_wheel_encoder", false);
+  const auto encoder_max = node->declare_parameter<int>("boreas.wheel_encoder.encoder_max", 16777216);
+  CLOG(WARNING, "boreas_wrapper") << "Wheel encoder enabled: " << use_wheel_encoder;
+  std::vector<std::pair<int64_t, int64_t>> all_wheel_meas;
+  double wheel_param = 0.0;
+  EdgeTransform T_wheel_robot; 
+  if (use_wheel_encoder) {
+    load_wheel_encoder_data(loc_dir, encoder_max, all_wheel_meas);
+    T_wheel_robot = load_T_wheel_robot(loc_dir);
+
+    CLOG(WARNING, "boreas_wrapper") << "Loaded " << all_wheel_meas.size() << " wheel measurements";
+    CLOG(WARNING, "boreas_wrapper") << "Transform from wheel to robot has been set to:\n" << T_wheel_robot;
   }
 
   // Pose graph
@@ -694,6 +772,7 @@ int main(int argc, char **argv) {
   // main loop
   int frame = 0;
   int imu_counter = 0;
+  int wheel_counter = 0;
   auto it = files.begin();
   while (it + 1 != files.end()) {
     if (!rclcpp::ok()) break;
@@ -780,6 +859,33 @@ int main(int argc, char **argv) {
       CLOG(WARNING, "boreas_wrapper") << "Loaded " << gyro_msgs.size() << " IMU measurements";
     }
 
+    // Feed in wheel encoder data if available/desired
+    std::vector<std::pair<rclcpp::Time, double>> wheel_meas;
+    if (use_wheel_encoder) {
+      int64_t timestamp_wheel = all_wheel_meas[wheel_counter].first;
+      int64_t start_timestamp = points(0, 5);
+      int64_t end_timestamp = points(points.rows() - 1, 5);
+
+      if (wheel_counter == 0) {
+        // Find wheel measurement right before lidar frame to initialize
+        while (all_wheel_meas[wheel_counter].first < start_timestamp) {
+          ++wheel_counter;
+        }
+      }
+
+      // Loop through all wheel measurements from previous one to end of current lidar frame
+      // This captures wheel measurements that are between frames
+      while (wheel_counter < all_wheel_meas.size() && all_wheel_meas[wheel_counter].first < end_timestamp) {
+        std::pair<rclcpp::Time, double> wheel_msg = {
+          rclcpp::Time(all_wheel_meas[wheel_counter].first),             // timestamp
+          static_cast<double>(all_wheel_meas[wheel_counter].second)      // pulse count
+        };
+        wheel_meas.push_back(wheel_msg);
+        ++wheel_counter;
+      }
+      CLOG(WARNING, "boreas_wrapper") << "Loaded " << wheel_meas.size() << " wheel measurements";
+    }
+
     // Convert message to query_data format and store into query_data
     auto query_data = std::make_shared<lidar::LidarQueryCache>();
 
@@ -804,6 +910,12 @@ int main(int argc, char **argv) {
     if (gyro_msgs.size() > 0) {
       query_data->T_s_r_gyro.emplace(T_imu_robot);
       query_data->gyro_msgs.emplace(gyro_msgs);
+    }
+
+    // set wheel encoder messages
+    if (wheel_meas.size() > 0) {
+      query_data->T_s_r_wheel.emplace(T_wheel_robot);
+      query_data->wheel_meas.emplace(wheel_meas);
     }
 
     // execute the pipeline
