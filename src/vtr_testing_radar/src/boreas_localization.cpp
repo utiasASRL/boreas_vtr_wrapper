@@ -274,15 +274,6 @@ void load_wheel_encoder_data(const fs::path &path, const int encoder_max, std::v
   }
 }
 
-void load_radar_time_span(const cv::Mat &raw_data, int64_t &start_time, int64_t &final_time) {
-  const uint N = raw_data.rows;  
-
-  CLOG(WARNING, "boreas_wrapper") << "Number of radar measurements: " << N;
-  CLOG(WARNING, "boreas_wrapper") << "Number of cols: " << raw_data.cols;
-  start_time = *((int64_t *)(raw_data.ptr<uchar>(0))) * 1000;
-  final_time = *((int64_t *)(raw_data.ptr<uchar>(N - 1))) * 1000;
-}
-
 Eigen::Matrix3d toRoll(const double &r) {
   Eigen::Matrix3d roll;
   roll << 1, 0, 0, 0, cos(r), sin(r), 0, -sin(r), cos(r);
