@@ -6,8 +6,13 @@
 ODO_INPUT=$1
 LOC_INPUT=$2
 
-# Using the config within the aeva package
-PARAM_FILE=${VTRRROOT}/src/vtr_testing_aeva/config/aeva_boreas.yaml
+if [ $# -eq 3 ]; then
+  PARAM_FILE=$3
+else
+  PARAM_FILE=${VTRRROOT}/src/vtr_testing_aeva/config/aeva_boreas.yaml
+fi
+
+echo "Using parameter file ${PARAM_FILE}"
   
 # Save param file
 SAVE_CONFIG=aeva_localization_config.yaml

@@ -4,18 +4,15 @@
 
 # Get arguments
 ODO_INPUT=$1
-
-# Using the config within the aeva package
-PARAM_FILE=${VTRRROOT}/src/vtr_testing_aeva/config/aeva_boreas.yaml
-  
-# Save param file
-SAVE_CONFIG=aeva_odometry_config.yaml
-mkdir -p ${VTRRRESULT}/${ODO_INPUT}
-cp ${PARAM_FILE} ${VTRRRESULT}/${ODO_INPUT}/${SAVE_CONFIG}
-echo "PARAM FILE IS ${PARAM_FILE}"
+if [ $# -eq 2 ]; then
+  PARAM_FILE=$2
+else
+  PARAM_FILE=${VTRRROOT}/src/vtr_testing_aeva/config/aeva_boreas.yaml
+fi
 
 # Log
 echo "Running odometry on sequence ${ODO_INPUT}, storing result to ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}"
+echo "Using parameter file ${PARAM_FILE}"
 
 # Source the VTR environment with the testing package
 source ${VTRRROOT}/src/install/setup.bash

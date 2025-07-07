@@ -15,7 +15,7 @@ mkdir -p ${VTRRRESULT}
 
 # Load in param file based on sensor
 PARAM_FILE=${VTRRROOT}/runtime/config/${SENSOR}_config.yaml
-echo "PARAM FILE IS ${PARAM_FILE}"
+echo "Using parameter file ${PARAM_FILE}"
 
 # Save param file
 SAVE_CONFIG=${SENSOR}_${MODE}_config.yaml

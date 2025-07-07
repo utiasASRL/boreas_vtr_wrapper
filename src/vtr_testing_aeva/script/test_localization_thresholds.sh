@@ -10,8 +10,14 @@ LOC_INPUT=$2
 export VTRRRESULT=${VTRRESULT}/aeva
 mkdir -p ${VTRRRESULT}
 
-# Using the config within the aeva package
-PARAM_FILE=${VTRRROOT}/src/vtr_testing_aeva/config/aeva_boreas.yaml
+if [ $# -eq 3 ]; then
+  PARAM_FILE=$3
+else
+  # PARAM_FILE=${VTRRROOT}/src/vtr_testing_aeva/config/aeva_boreas.yaml
+  PARAM_FILE=${VTRRROOT}/runtime/config/aeva_config.yaml
+fi
+
+echo "Using parameter file ${PARAM_FILE}"
   
 # Save param file
 SAVE_CONFIG=aeva_localization_config.yaml
@@ -58,12 +64,15 @@ if [ ! -d ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}_threshold_1 ]; then
 
   # Rename the data directory to include the threshold number
   mv ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT} ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}_threshold_1
+else
+  echo "Directory ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}_threshold_1 already exists. Skipping loc_threshold=1 test."
 fi
 
 ############
 
 # Define the range of loc_threshold values
 for loc_threshold in 2 5 10 15 25 50 100 150 200; do
+  echo "Running test with loc_threshold=${loc_threshold}"
   rm -r ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}
   mkdir -p ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}
   cp -r ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}/*  ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}

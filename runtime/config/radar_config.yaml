@@ -26,7 +26,13 @@
 
     ############ Boreas data configuration ############
     boreas:
-      radar_dir_name: "paper1_radar" # [radar, doppler_radar, range_corr_radar, az_doppler_radar]
+      radar_dir_name: "radar" # [radar, doppler_radar, range_corr_radar, az_doppler_radar]
+      imu:
+        use_imu: true
+        imu_name: "dmu" # options are "dmu", "aeva", or "imu" (for applanix imu)
+      odometry:
+        start_frame: 0  # start frame for odometry
+        end_frame: -1   # -1 means process all frames
       localization:
         reverse: false   # Whether to localize against a reversed map
 
@@ -157,15 +163,13 @@
         type: radar.odometry_icp
 
         # continuous time estimation
+        prior_bloat: 1.0
         use_trajectory_estimation: true
         traj_num_extra_states: 0
-        traj_lock_prev_pose: true
-        traj_lock_prev_vel: false
-        traj_qc_diag: [1.0, 0.001, 0.0001, 0.001, 0.001, 0.01]
-        #traj_qc_diag: [0.01, 0.00001, 0.0001, 0.0001, 0.0001, 0.001]
+        traj_qc_diag: [1.0, 0.1, 0.001, 0.001, 0.001, 0.001]
 
         # ICP parameters
-        num_threads: 1
+        num_threads: 10
         first_num_steps: 2 # number of steps to with a greater matching distance threshold
         initial_max_iter: 4 # phase 1 max iterations
         initial_max_pairing_dist: 5.0 # phase 1 max pairing distance in meters
@@ -180,16 +184,17 @@
         w_icp_diag: [1.0, 1.0, 1.0]
         normal_score_threshold: 0.0
 
+        # Gyro stuff
+        gyro_cov: 1e-6
+        estimate_gyro_bias: false
+
         # Doppler velocity parameters
-        use_yaw_meas: true
-        use_vel_meas: true
+        use_vel_meas: false
         use_radial_velocity: false
         dopp_cauchy_k: 100.0
-        dopp_meas_std: 1.0
-        vel_fwd_std: 0.4  # 0.6 for N1, 0.4 for N2
-        vel_side_std: 1.0 # 1.2 for N1, 1.0 for N2
-        yaw_cauchy_k: 100.0
-        yaw_meas_std: 0.00001 #0.2 for N1, 0.001 for B2?
+        dopp_meas_std: 1e-6
+        vel_fwd_std: 0.0001  # 0.6 for N1, 0.4 for N2
+        vel_side_std: 0.0001 # 1.2 for N1, 1.0 for N2
 
         # steam parameters
         verbose: false
@@ -203,7 +208,7 @@
       mapping:
         type: radar.odometry_map_maintenance
 
-        map_voxel_size: 1.0 # voxel size of the map in meters
+        map_voxel_size: 0.3 # voxel size of the map in meters
 
         crop_range_front: 80.0 # odometry map crop range centered at vehicle in meters (radius of the odometry map, old is 80
         back_over_front_ratio: 1.0 # ratio of the back crop range to the front crop range (not important)
@@ -242,7 +247,7 @@
         initial_max_iter: 4
         initial_max_pairing_dist: 5.0
         initial_max_planar_dist: 5.0
-        refined_max_iter: 1000
+        refined_max_iter: 100
         refined_max_pairing_dist: 5.0
         refined_max_planar_dist: 5.0
         averaging_num_steps: 5

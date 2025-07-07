@@ -34,6 +34,39 @@ int64_t getStampFromPath(const std::string &path) {
   return time1 * 1000;
 }
 
+int64_t stringToNanoseconds(const std::string &timestamp_str) {
+  size_t dot_pos = timestamp_str.find('.');
+  std::string sec_str = timestamp_str.substr(0, dot_pos);
+  std::string frac_str = (dot_pos != std::string::npos) ? timestamp_str.substr(dot_pos + 1) : "0";
+
+  if (dot_pos == std::string::npos) {
+    switch (timestamp_str.length()) {
+      case 16: // Aeva timestamp format
+        return std::stoll(timestamp_str) * 1'000;
+      case 19: // DMU timestamp format
+        return std::stoll(timestamp_str);
+      default:
+        throw std::invalid_argument("Unexpected timestamp length: " + std::to_string(timestamp_str.length()));
+    }
+  }
+
+  // Pad fractional part to exactly 9 digits (nanoseconds)
+  while (frac_str.length() < 9) frac_str += '0';
+  if (frac_str.length() > 9) frac_str = frac_str.substr(0, 9); // truncate
+
+  int64_t seconds = std::stoll(sec_str);
+  int64_t nanos = std::stoll(frac_str);
+  return seconds * 1'000'000'000LL + nanos;
+}
+
+struct IMUMeasurement {
+  // custom to prevent precision loss
+  int64_t timestamp_ns;
+  long double angvel_x;
+  long double angvel_y;
+  long double angvel_z;
+};
+
 std::pair<int64_t, Eigen::MatrixXd> load_lidar(const std::string &path) {
   std::ifstream ifs(path, std::ios::binary);
   std::vector<char> buffer(std::istreambuf_iterator<char>(ifs), {});
@@ -64,7 +97,7 @@ EdgeTransform load_T_robot_lidar(const fs::path &path) {
   Eigen::Matrix4d T_applanix_lidar_mat;
   for (size_t row = 0; row < 4; row++)
     for (size_t col = 0; col < 4; col++) ifs >> T_applanix_lidar_mat(row, col);
-  // Extrinsic from radar to rear axel
+  // Extrinsic from lidar to rear axel
   Eigen::Matrix4d T_axel_applanix;
   // Want to estimate at rear axel, this transform has x forward, y right, z down
   T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
@@ -168,28 +201,53 @@ EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name
   return T_robot_imu.inverse();
 }
 
-void load_all_imu_meas(const fs::path &imu_meas_file, std::vector<Eigen::MatrixXd> &all_imu_meas, fs::path imu_file_name) {
+void load_all_imu_meas(const fs::path &imu_meas_file, std::vector<IMUMeasurement> &all_imu_meas, fs::path imu_file_name) {
   std::ifstream imu_stream(imu_meas_file, std::ios::in);
   // Get rid of header (GPSTime,angvel_z,angvel_y,angvel_x,accelz,accely,accelx)
   std::string header;
   std::getline(imu_stream, header);
   // Loop over all imu measurements
   std::string imu_meas;
+
   while (std::getline(imu_stream, imu_meas)) {
-      std::stringstream ss(imu_meas);
-      std::vector<long double> imu;
-      for (std::string str; std::getline(ss, str, ',');)
-              imu.push_back(std::stod(str));
-      Eigen::MatrixXd imu_meas_mat = Eigen::MatrixXd(4, 1);
-      if (imu_file_name == "imu.csv" || imu_file_name == "imu_raw.csv") {
-        imu_meas_mat << imu[0], imu[3], imu[2], imu[1]; // timestamp, angvel_x, angvel_y, angvel_z
-      } else if (imu_file_name == "dmu_imu.csv") {
-        imu_meas_mat << imu[0], imu[7], imu[8], imu[9]; // timestamp, angvel_x, angvel_y, angvel_z
-      } else {
-        CLOG(ERROR, "boreas_wrapper") << "Unknown IMU file name: " << imu_file_name;
-        break;
-      }        
-      all_imu_meas.push_back(imu_meas_mat);
+    std::stringstream ss(imu_meas);
+    std::string token;
+
+    // Load timestamp separately to preserve precision
+    std::getline(ss, token, ',');  // token = timestamp string
+    int64_t timestamp_ns = stringToNanoseconds(token);
+    // Load rest of the IMU data
+    std::vector<long double> imu;
+    while (std::getline(ss, token, ',')) {
+      imu.push_back(std::stod(token));
+    }
+
+    IMUMeasurement meas;
+    if (imu_file_name == "imu.csv" || imu_file_name == "imu_raw.csv") {
+      // [angvel_z, angvel_y, angvel_x, accelz, accely, accelx]
+      meas.timestamp_ns = static_cast<int64_t>(timestamp_ns);
+      meas.angvel_x = imu[2];
+      meas.angvel_y = imu[1];
+      meas.angvel_z = imu[0];
+    } else if (imu_file_name == "dmu_imu.csv") {
+      // [angvel_z, angvel_y, angvel_x, ..., ..., ..., ..., angvel_x, angvel_y, angvel_z]
+      meas.timestamp_ns = static_cast<int64_t>(timestamp_ns);
+      meas.angvel_x = imu[6];
+      meas.angvel_y = imu[7];
+      meas.angvel_z = imu[8];
+    } else if (imu_file_name == "aeva_imu.csv") {
+      // [angvel_x, angvel_y, angvel_z, ..., ..., ..., ..., angvel_x, angvel_y, angvel_z]
+      meas.timestamp_ns = static_cast<int64_t>(timestamp_ns);
+      meas.angvel_x = imu[0];
+      meas.angvel_y = imu[1];
+      meas.angvel_z = imu[2];
+    } else {
+      // Unknown IMU file name
+      CLOG(ERROR, "boreas_wrapper") << "Unknown IMU file name: " << imu_file_name;
+      break;
+    }
+
+    all_imu_meas.push_back(meas);
   }
 }
 
@@ -224,15 +282,15 @@ int main(int argc, char **argv) {
   }
   configureLogging(log_filename, log_debug, log_enabled);
 
-  CLOG(WARNING, "test") << "Odometry Directory: " << odo_dir.string();
-  CLOG(WARNING, "test") << "Output Directory: " << data_dir.string();
+  CLOG(WARNING, "boreas_wrapper") << "Odometry Directory: " << odo_dir.string();
+  CLOG(WARNING, "boreas_wrapper") << "Output Directory: " << data_dir.string();
 
   std::vector<std::string> parts;
   boost::split(parts, odo_dir_str, boost::is_any_of("/"));
   auto stem = parts.back();
   boost::replace_all(stem, "-", "_");
-  CLOG(WARNING, "test") << "Publishing status to topic: "
-                        << ("b" + stem + "_lidar_odometry");
+  CLOG(WARNING, "boreas_wrapper") << "Publishing status to topic: "
+                                  << ("b" + stem + "_lidar_odometry");
   const auto status_publisher = node->create_publisher<std_msgs::msg::String>(
       "b" + stem + "_lidar_odometry", 1);
 
@@ -240,7 +298,7 @@ int main(int argc, char **argv) {
   const auto use_imu = node->declare_parameter<bool>("boreas.imu.use_imu", false);
   const auto imu_name = node->declare_parameter<std::string>("boreas.imu.imu_name", "dmu");
   CLOG(WARNING, "boreas_wrapper") << "IMU enabled: " << use_imu;
-  std::vector<Eigen::MatrixXd> all_imu_meas;
+  std::vector<IMUMeasurement> all_imu_meas;
   EdgeTransform T_imu_robot; 
   if (use_imu) {
     // Check that imu name is one of "dmu", "aeva", "imu"
@@ -283,8 +341,8 @@ int main(int argc, char **argv) {
 
   const auto T_robot_lidar = load_T_robot_lidar(odo_dir);
   const auto T_lidar_robot = T_robot_lidar.inverse();
-  CLOG(WARNING, "test") << "Transform from " << robot_frame << " to "
-                        << lidar_frame << " has been set to" << T_lidar_robot;
+  CLOG(WARNING, "boreas_wrapper") << "Transform from " << robot_frame << " to "
+                                  << lidar_frame << " has been set to" << T_lidar_robot;
 
   auto tf_sbc = std::make_shared<tf2_ros::StaticTransformBroadcaster>(node);
   auto msg =
@@ -301,7 +359,7 @@ int main(int argc, char **argv) {
   for (const auto &dir_entry : fs::directory_iterator{odo_dir / "lidar"})
     if (dir_entry.path().extension() == ".bin") files.push_back(dir_entry);
   std::sort(files.begin(), files.end());
-  CLOG(WARNING, "test") << "Found " << files.size() << " lidar data";
+  CLOG(WARNING, "boreas_wrapper") << "Found " << files.size() << " lidar data";
   const auto start_frame = node->declare_parameter<int>("boreas.odometry.start_frame", 0);
   const auto end_frame = node->declare_parameter<int>("boreas.odometry.end_frame", -1);
 
@@ -330,41 +388,53 @@ int main(int argc, char **argv) {
 
     ///
     const auto [timestamp, points] = load_lidar(it->path().string());
-
-    CLOG(WARNING, "test") << "Loading lidar frame " << frame
-                          << " with timestamp " << timestamp;
+    CLOG(WARNING, "boreas_wrapper") << "\033[95mLoading lidar frame " << frame
+                                    << " with timestamp " << timestamp << "\033[0m";
 
     // publish clock for sim time
     auto time_msg = rosgraph_msgs::msg::Clock();
     time_msg.clock = rclcpp::Time(timestamp);
     clock_publisher->publish(time_msg);
 
-    std::vector<sensor_msgs::msg::Imu> gyro_msgs;
     // Feed in IMU data if available/desired
+    std::vector<sensor_msgs::msg::Imu> gyro_msgs;
     if (use_imu) {
-      int64_t timestamp_imu = all_imu_meas[imu_counter](0);
+      ///////////////* TEMP CALCULATION - REMOVE AFTER TESTING *///////////////
+      std::vector<double> differences;
+      for (size_t i = 1; i < all_imu_meas.size(); ++i) {
+        differences.push_back(all_imu_meas[i].timestamp_ns / 1e9 - all_imu_meas[i - 1].timestamp_ns / 1e9);
+      }
+      std::sort(differences.begin(), differences.end());
+      double median = differences[differences.size() / 2];
+      CLOG(WARNING, "boreas_wrapper") << "Median time difference between IMU measurements: " << median;
+      double min_bias_init_count = 1.0 / median;
+      CLOG(WARNING, "boreas_wrapper") << "Minimum bias initialization count: " << min_bias_init_count;
+      ///////////////* TEMP CALCULATION - REMOVE AFTER TESTING *///////////////
+
+      int64_t timestamp_imu = all_imu_meas[imu_counter].timestamp_ns;
       int64_t start_timestamp = points(0, 5) * 1.0e9;
       int64_t end_timestamp = points(points.rows() - 1, 5) * 1.0e9;
 
       if (imu_counter == 0) {
-        // Find IMU measurement right before radar frame to initialize
-        while (all_imu_meas[imu_counter](0) < start_timestamp) {
+        // Find IMU measurement right before lidar frame to initialize
+        while (all_imu_meas[imu_counter].timestamp_ns < start_timestamp) {
           ++imu_counter;
         }
       }
 
-      // Loop through all IMU measurements from previous one to end of current radar frame
+      // Loop through all IMU measurements from previous one to end of current lidar frame
       // This captures IMU measurements that are between frames
       Eigen::Matrix<double, 4, 1> imu_meas;
-      while (imu_counter < all_imu_meas.size() && all_imu_meas[imu_counter](0) < end_timestamp) {
+      while (imu_counter < all_imu_meas.size() && all_imu_meas[imu_counter].timestamp_ns < end_timestamp) {
         auto gyro_msg = sensor_msgs::msg::Imu();
-        gyro_msg.angular_velocity.x = all_imu_meas[imu_counter](1);
-        gyro_msg.angular_velocity.y = all_imu_meas[imu_counter](2);
-        gyro_msg.angular_velocity.z = all_imu_meas[imu_counter](3);
-        gyro_msg.header.stamp = rclcpp::Time(all_imu_meas[imu_counter](0));
+        gyro_msg.angular_velocity.x = all_imu_meas[imu_counter].angvel_x;
+        gyro_msg.angular_velocity.y = all_imu_meas[imu_counter].angvel_y;
+        gyro_msg.angular_velocity.z = all_imu_meas[imu_counter].angvel_z;
+        gyro_msg.header.stamp = rclcpp::Time(all_imu_meas[imu_counter].timestamp_ns);
         gyro_msgs.push_back(gyro_msg);
         ++imu_counter;
       }
+      CLOG(WARNING, "boreas_wrapper") << "Loaded " << gyro_msgs.size() << " IMU measurements";
     }
 
     // Convert message to query_data format and store into query_data
@@ -412,8 +482,8 @@ int main(int argc, char **argv) {
   callback.reset();
   pipeline.reset();
   pipeline_factory.reset();
-  CLOG(WARNING, "test") << "Saving pose graph and reset.";
+  CLOG(WARNING, "boreas_wrapper") << "Saving pose graph and reset.";
   graph->save();
   graph.reset();
-  CLOG(WARNING, "test") << "Saving pose graph and reset. - DONE!";
+  CLOG(WARNING, "boreas_wrapper") << "Saving pose graph and reset. - DONE!";
 }
