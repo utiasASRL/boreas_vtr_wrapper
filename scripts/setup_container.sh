@@ -3,8 +3,7 @@ export VTRROOT=$ROOTDIR                     # This is required for some internal
 export VTRRROOT=$ROOTDIR
 export VTRSRC=$ROOTDIR/external/vtr3
 export VTRRESULT=$ROOTDIR/results           # POINT THIS TO WHERE YOU WANT TO STORE RESULTS
-# export VTRRDATA=$ROOTDIR/data               # POINT THIS TO DATA DIRECTORY
-export VTRRDATA=/home/katya/Documents/Data/aevaii 
+export VTRRDATA=$ROOTDIR/data               # POINT THIS TO DATA DIRECTORY
 
 # Source setups
 source /opt/ros/humble/setup.bash
