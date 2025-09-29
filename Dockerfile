@@ -1,9 +1,10 @@
-FROM nvidia/cuda:11.7.1-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
 ARG GROUPID=0
 ARG USERID=0
 ARG USERNAME=root
 ARG HOMEDIR=/root
+ARG CUDA_ARCH="8.9"
 
 RUN if [ ${GROUPID} -ne 0 ]; then addgroup --gid ${GROUPID} ${USERNAME}; fi \
   && if [ ${USERID} -ne 0 ]; then adduser --disabled-password --gecos '' --uid ${USERID} --gid ${GROUPID} ${USERNAME}; fi
@@ -118,6 +119,43 @@ RUN cd ${HOMEDIR}/.casadi \
   && make -j${NUMPROC} install
 ENV PYTHONPATH=${PYTHONPATH}:/usr/local
 ENV LD_LIBRARY_PATH=/usr/local/casadi:${LD_LIBRARY_PATH}
+
+# OpenCV stuff
+RUN apt install -q -y libgtk2.0-dev pkg-config libavcodec-dev libavformat-dev libswscale-dev python3-dev python3-numpy
+
+RUN mkdir -p ${HOMEDIR}/opencv && cd ${HOMEDIR}/opencv \
+&& git clone https://github.com/opencv/opencv.git . 
+
+RUN cd ${HOMEDIR}/opencv && git checkout 4.10.0
+RUN mkdir -p ${HOMEDIR}/opencv_contrib && cd ${HOMEDIR}/opencv_contrib \
+&& git clone https://github.com/opencv/opencv_contrib.git . 
+RUN cd ${HOMEDIR}/opencv_contrib && git checkout 4.10.0 
+
+
+RUN apt install -q -y build-essential cmake git libgtk2.0-dev pkg-config libavcodec-dev libavformat-dev libswscale-dev python3-dev python3-numpy
+# # generate Makefiles (note that install prefix is customized to: /usr/local/opencv_cuda)
+
+RUN mkdir -p ${HOMEDIR}/opencv/build && cd ${HOMEDIR}/opencv/build \
+&& cmake -D CMAKE_BUILD_TYPE=RELEASE \
+-D CMAKE_INSTALL_PREFIX=/usr/local/opencv_cuda \
+-D OPENCV_EXTRA_MODULES_PATH=${HOMEDIR}/opencv_contrib/modules \
+-D PYTHON_DEFAULT_EXECUTABLE=/usr/bin/python3.10 \
+-DBUILD_opencv_python2=OFF \
+-DBUILD_opencv_python3=ON \
+-DWITH_OPENMP=ON \
+-DWITH_CUDA=ON \
+-D CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-11.8 \
+-DOPENCV_ENABLE_NONFREE=ON \
+-D OPENCV_GENERATE_PKGCONFIG=ON \
+-DWITH_TBB=ON \
+-DWITH_GTK=ON \
+-DWITH_OPENMP=ON \
+-DWITH_FFMPEG=ON \
+-DBUILD_opencv_cudacodec=OFF \
+-D BUILD_EXAMPLES=OFF \
+-D CUDA_ARCH_BIN=$CUDA_ARCH ..  && make -j16 && make install
+
+ENV LD_LIBRARY_PATH=/usr/local/opencv_cuda/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
 
 # Set up entrypoint
 COPY ./entrypoint.sh ./entrypoint.sh
