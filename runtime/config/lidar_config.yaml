@@ -3,7 +3,7 @@
     ############ system configuration ############
     # Data logging
     log_to_file: true
-    log_debug: true
+    log_debug: false
     log_enabled: [
         ## ADD LOGGER IDS HERE
         # tactic
@@ -17,7 +17,7 @@
         # "lidar.velodyne_converter",
         # "lidar.preprocessing",
         # "lidar.odometry_icp",
-        "lidar.odometry_wheel",
+        # "lidar.odometry_wheel",
         # "lidar.odometry_map_maintenance",
         # "lidar.vertex_test",
         # "lidar.localization_map_recall",
@@ -30,7 +30,7 @@
         use_imu: true
         imu_name: "dmu" # options are "dmu", "aeva", or "imu" (for applanix imu)
       wheel_encoder:
-        use_wheel_encoder: true
+        use_wheel_encoder: false
         encoder_max: 16777216 # 2^24
       odometry:
         start_frame: 0  # start frame for odometry
@@ -74,8 +74,8 @@
 
       odometry: [
           # odometry and mapping thread modules
-          # "icp",
-          "wheel",
+          "icp",
+          # "wheel",
           "mapping",
           "vertex_test",
           "memory",
@@ -105,10 +105,10 @@
       filtering:
         type: lidar.preprocessing
 
-        num_threads: 10
+        num_threads: 1
 
-        crop_range: 60.0
-        frame_voxel_size: 1.0 # grid subsampling voxel size
+        crop_range: 80.0
+        frame_voxel_size: 0.7 # grid subsampling voxel size
 
         vertical_angle_res: 0.0017453292519943296 # vertical angle resolution in radius (0.1 in degree)
         polar_r_scale: 2.0 # polar_r_scale x vertical_angle_res = nearest neighbor search radius for normal computation
@@ -137,7 +137,7 @@
         traj_qc_diag: [1.0, 0.1, 0.1, 0.1, 0.1, 1.0]
 
         # ICP parameters
-        num_threads: 10
+        num_threads: 1
         first_num_steps: 3
         initial_max_iter: 6
         initial_max_pairing_dist: 3.0
@@ -163,7 +163,7 @@
       wheel:
         type: lidar.odometry_wheel
 
-        num_threads: 10
+        num_threads: 1
 
         # wheel odometry parameters       
         potentially_slipping: true
@@ -180,7 +180,7 @@
 
         map_voxel_size: 0.3
 
-        crop_range_front: 60.0
+        crop_range_front: 80.0
         back_over_front_ratio: 1.0
 
         point_life_time: 10.0
@@ -212,12 +212,12 @@
         use_pose_prior: true
 
         # ICP parameters
-        num_threads: 10
+        num_threads: 1
         first_num_steps: 3
         initial_max_iter: 6
         initial_max_pairing_dist: 5.0
         initial_max_planar_dist: 1.0
-        refined_max_iter: 30
+        refined_max_iter: 20
         refined_max_pairing_dist: 1.0
         refined_max_planar_dist: 0.3
         averaging_num_steps: 3
