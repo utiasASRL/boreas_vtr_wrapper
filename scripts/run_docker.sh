@@ -20,7 +20,6 @@ else
 	-v /tmp/.X11-unix:/tmp/.X11-unix \
 	-v ${HOME}/.Xauthority:${HOME}/.Xauthority:rw \
 	-v $ROOTDIR:$ROOTDIR:rw \
-	-v /home/katya/Documents/Data/:/home/katya/Documents/Data/:rw \
 	-w $ROOTDIR boreas_wrapper_$(whoami)
 fi
 cd $ROOTDIR
