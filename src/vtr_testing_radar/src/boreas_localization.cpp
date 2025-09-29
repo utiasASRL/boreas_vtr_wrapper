@@ -309,7 +309,6 @@ EdgeTransform load_T_enu_radar_init(const fs::path &path, const bool &reverse) {
     while (std::getline(ifs, last_pose)) {
       first_pose = last_pose;
     }
-    
   } else {
     std::getline(ifs, first_pose);
   }
