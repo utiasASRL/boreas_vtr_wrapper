@@ -482,9 +482,9 @@ int main(int argc, char **argv) {
       }
       std::sort(differences.begin(), differences.end());
       double median = differences[differences.size() / 2];
-      CLOG(WARNING, "boreas_wrapper") << "Median time difference between IMU measurements: " << median;
+      CLOG(DEBUG, "boreas_wrapper") << "Median time difference between IMU measurements: " << median;
       double min_bias_init_count = 1.0 / median;
-      CLOG(WARNING, "boreas_wrapper") << "Minimum bias initialization count: " << min_bias_init_count;
+      CLOG(DEBUG, "boreas_wrapper") << "Minimum bias initialization count: " << min_bias_init_count;
       ///////////////* TEMP CALCULATION - REMOVE AFTER TESTING *///////////////
 
       int64_t timestamp_imu = all_imu_meas[imu_counter].timestamp_ns;
@@ -510,7 +510,7 @@ int main(int argc, char **argv) {
         gyro_msgs.push_back(gyro_msg);
         ++imu_counter;
       }
-      CLOG(WARNING, "boreas_wrapper") << "Loaded " << gyro_msgs.size() << " IMU measurements";
+      CLOG(DEBUG, "boreas_wrapper") << "Loaded " << gyro_msgs.size() << " IMU measurements";
     }
 
     // Feed in wheel encoder data if available/desired
@@ -537,7 +537,7 @@ int main(int argc, char **argv) {
         wheel_meas.push_back(wheel_msg);
         ++wheel_counter;
       }
-      CLOG(WARNING, "boreas_wrapper") << "Loaded " << wheel_meas.size() << " wheel measurements";
+      CLOG(DEBUG, "boreas_wrapper") << "Loaded " << wheel_meas.size() << " wheel measurements";
     }
 
     // Convert message to query_data format and store into query_data

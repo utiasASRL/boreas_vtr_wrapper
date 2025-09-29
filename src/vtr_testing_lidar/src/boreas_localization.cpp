@@ -563,7 +563,7 @@ int main(int argc, char **argv) {
         gyro_msgs.push_back(gyro_msg);
         ++imu_counter;
       }
-      CLOG(WARNING, "boreas_wrapper") << "Loaded " << gyro_msgs.size() << " IMU measurements";
+      CLOG(DEBUG, "boreas_wrapper") << "Loaded " << gyro_msgs.size() << " IMU measurements";
     }
 
     // Feed in wheel encoder data if available/desired
@@ -590,7 +590,7 @@ int main(int argc, char **argv) {
         wheel_meas.push_back(wheel_msg);
         ++wheel_counter;
       }
-      CLOG(WARNING, "boreas_wrapper") << "Loaded " << wheel_meas.size() << " wheel measurements";
+      CLOG(DEBUG, "boreas_wrapper") << "Loaded " << wheel_meas.size() << " wheel measurements";
     }
 
     // Convert message to query_data format and store into query_data
