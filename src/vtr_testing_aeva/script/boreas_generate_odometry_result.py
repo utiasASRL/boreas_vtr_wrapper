@@ -73,14 +73,12 @@ def main(dataset_dir, result_dir, velocity):
   
   # T_robot_lidar = get_inverse_tf(T_sr)
   
-  T_app_aeva = dataset_odo.sequences[0].calib.T_applanix_aeva
-  
-  T_ax_app = np.array([[ 0.0299955,  0.99955003,  0, 0.51],
-                       [-0.99955003,  0.0299955,  0, 0.0],
-                       [ 0, 0, 1, 1.45],
-                       [ 0, 0, 0, 1]]).astype(np.float64)
-  
-  T_robot_lidar = T_ax_app @ T_app_aeva
+  T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
+                            [-0.99955003, 0.0299955, 0., 0.0],
+                            [ 0, 0, 1, 1.45],
+                            [ 0, 0, 0, 1]])
+
+  T_robot_applanix = T_axel_applanix
 
   odo_dir = osp.join(result_dir, odo_input_seq)
 
@@ -100,8 +98,9 @@ def main(dataset_dir, result_dir, velocity):
     timestamp = int(int(message[1].timestamp) / 1000)
     T_w_r_vec = np.array(message[1].t_world_robot.xi)[..., None]
     T_w_r = se3op.vec2tran(T_w_r_vec)
-    T_r_w_res = get_inverse_tf(T_w_r).flatten().tolist()[:12]
-    result.append([timestamp] + T_r_w_res)
+    T_w_a = T_w_r @ T_robot_applanix
+    T_a_w_res = get_inverse_tf(T_w_a).flatten().tolist()[:12]
+    result.append([timestamp] + T_a_w_res)
   
   if velocity:
     bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "odometry_vel_result")
@@ -119,8 +118,8 @@ def main(dataset_dir, result_dir, velocity):
       w_v_r_robot[5] = message[1].angular.z
 
       w_r_v_lidar = np.zeros((6))
-      w_r_v_lidar[:3] = (- w_v_r_robot[:3].reshape(1, 3) @ T_robot_lidar[:3, :3]).flatten()
-      w_r_v_lidar[3:] = (- w_v_r_robot[3:].reshape(1, 3) @ T_robot_lidar[:3, :3]).flatten()
+      w_r_v_lidar[:3] = (- w_v_r_robot[:3].reshape(1, 3) @ T_robot_applanix[:3, :3]).flatten()
+      w_r_v_lidar[3:] = (- w_v_r_robot[3:].reshape(1, 3) @ T_robot_applanix[:3, :3]).flatten()
 
       timestamp = int(int(message[0]) / 1000)
       vel_results.append([timestamp] + w_r_v_lidar.flatten().tolist())
