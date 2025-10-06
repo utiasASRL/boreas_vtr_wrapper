@@ -774,7 +774,7 @@ int main(int argc, char **argv) {
   int imu_counter = 0;
   int wheel_counter = 0;
   auto it = files.begin();
-  while (it + 1 != files.end()) {
+  while (it != files.end()) {
     if (!rclcpp::ok()) break;
     rclcpp::spin_some(node);
     if (test_control.terminate()) break;

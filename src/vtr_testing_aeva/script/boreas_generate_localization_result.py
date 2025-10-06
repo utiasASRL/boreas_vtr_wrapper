@@ -65,24 +65,12 @@ def main(dataset_dir, result_dir, input_loc_dir):
   print("Odometry Run:", odo_input)
   print("Localization Runs:", loc_inputs)
   print("Dataset Directory:", dataset_dir)
-  
-  # # Aeries II sensor to rear axle transform
-  # T_sr = np.array([[ 0.99982945,  0.01750912,  0.00567659, -1.03971349],
-  #                   [-0.01754661,  0.99973757,  0.01034526, -0.38788971],
-  #                   [-0.00549427, -0.01044368,  0.99993037, -1.69798033],
-  #                   [ 0, 0, 0, 1]]).astype(np.float64)
 
-  # # Aeries I sensor to rear axle transform
-  # T_sr = np.array([[ 0.9999366830849237,    0.008341717781538466,   0.0075534496251198685, -1.0119098938516395],
-  #                   [-0.008341717774127972,  0.9999652112886684,    -3.150635091210066e-05, -0.3965882433517194],
-  #                   [-0.007553449599178521, -3.1504388681967066e-05, 0.9999714717963843,    -1.6970000000000010],
-  #                   [0, 0, 0, 1]]).astype(np.float64)
-  
-  T_ax_app = np.array([[ 0.0299955,  0.99955003,  0, 0.51],
-                       [-0.99955003,  0.0299955,  0, 0.0],
-                       [ 0, 0, 1, 1.45],
-                       [ 0, 0, 0, 1]]).astype(np.float64)
-  
+  T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
+                            [-0.99955003, 0.0299955, 0., 0.0],
+                            [ 0, 0, 1, 1.45],
+                            [ 0, 0, 0, 1]])
+
   # dataset directory and necessary sequences to load
   dataset_odo = BoreasDataset(osp.normpath(dataset_dir), [[odo_input]])
 
@@ -91,8 +79,8 @@ def main(dataset_dir, result_dir, input_loc_dir):
   for sequence in dataset_odo.sequences:
     # Ground truth is provided w.r.t sensor, so we set sensor to vehicle transform 
     # New way using rear axle
-    T_app_aeva = sequence.calib.T_applanix_aeva
-    T_robot_lidar_odo = T_ax_app @ T_app_aeva
+
+    T_robot_lidar_odo = T_axel_applanix @ sequence.calib.T_applanix_aeva
     T_lidar_robot_odo = get_inverse_tf(T_robot_lidar_odo)
 
     # build dictionary
@@ -119,7 +107,7 @@ def main(dataset_dir, result_dir, input_loc_dir):
       # Ground truth is provided w.r.t sensor, so we set sensor to vehicle transform
       # New way using rear axle
       T_app_aeva = sequence.calib.T_applanix_aeva
-      T_robot_lidar_loc = T_ax_app @ T_app_aeva
+      T_robot_lidar_loc = T_axel_applanix @ T_app_aeva
       T_lidar_robot_loc = get_inverse_tf(T_robot_lidar_loc)
 
       # build dictionary
@@ -155,10 +143,10 @@ def main(dataset_dir, result_dir, input_loc_dir):
       result.append([test_seq_timestamp, map_seq_timestamp] + T_map_test_in_lidar_res)
 
       if not int(message[1].timestamp / precision) in ground_truth_poses_loc.keys():
-        print("WARNING: timestamp not found: ", int(message[1].timestamp))
+        print("WARNING: time stamp not found 1: ", int(message[1].timestamp / precision))
         continue
       if not int(message[1].vertex_timestamp / precision) in ground_truth_poses_odo.keys():
-        print("WARNING: vertex timestamp not found: ", int(message[1].vertex_timestamp))
+        print("WARNING: time stamp not found 2: ", int(message[1].vertex_timestamp / precision))
         continue
 
       test_seq_timestamp = int(message[1].timestamp / precision)
@@ -184,7 +172,7 @@ def main(dataset_dir, result_dir, input_loc_dir):
       print("Written to file:", osp.join(output_dir, save_loc_input + ".txt"))
 
   # Option to save velocity results    
-  if True:
+  if False:
     bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "repeat_odometry_vel_result")
     parser = BagFileParser(bag_file)
     messages = parser.get_bag_messages("repeat_odometry_vel_result")
