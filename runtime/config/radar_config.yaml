@@ -19,7 +19,7 @@
         "radar.preprocessing",
         # "radar.mcransac",
         "radar.odometry_icp",
-        "radar.odometry_wheel",
+        # "radar.odometry_wheel",
         # "radar.vertex_test",
         # "radar.localization_map_recall",
         "radar.localization_icp",
@@ -32,7 +32,7 @@
         use_imu: true
         imu_name: "dmu" # options are "dmu", "aeva", or "imu" (for applanix imu)
       wheel_encoder:
-        use_wheel_encoder: true
+        use_wheel_encoder: false
         encoder_max: 16777216 # 2^24
       odometry:
         start_frame: 0  # start frame for odometry
@@ -60,7 +60,7 @@
       save_odometry_result: true
       save_odometry_vel_result: true
       save_localization_result: true
-      visualize: true
+      visualize: false
 
       rviz_loc_path_offset: [0., 0., 0.]
 
@@ -78,8 +78,8 @@
       odometry: [
           # odometry and mapping thread modules
           # "mcransac",
-          # "icp",
-          "wheel",
+          "icp",
+          # "wheel",
           "mapping",
           "vertex_test",
           "memory",
@@ -126,7 +126,7 @@
           threshold: 12.5
           static_threshold: 0.3
 
-        visualize: true
+        visualize: false
 
       filtering:
         type: radar.preprocessing
@@ -143,7 +143,7 @@
         num_sample_linearity: 5000 # max number of sample after filtering based on linearity
         min_linearity_score: -1.0 # min linearity score (negative value means no filtering)
 
-        visualize: true
+        visualize: false
 
     odometry:
       mcransac:
