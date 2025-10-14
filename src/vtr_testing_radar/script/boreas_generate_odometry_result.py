@@ -78,11 +78,17 @@ def main(dataset_dir, result_dir, velocity):
                             [-0.99955003, 0.0299955, 0., 0.0],
                             [ 0, 0, 1, 1.45],
                             [ 0, 0, 0, 1]])
+  # T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
+  #                           [0.99955003, -0.0299955, 0., 0.0],
+  #                           [ 0, 0, 1, 0.0],
+  #                           [ 0, 0, 0, 1]])
 
-  T_applanix_lidar = dataset_odo.sequences[0].calib.T_applanix_lidar
-  T_radar_lidar = dataset_odo.sequences[0].calib.T_radar_lidar
-  T_applanix_radar = T_applanix_lidar @ get_inverse_tf(T_radar_lidar)
-  T_robot_radar = T_axel_applanix @ T_applanix_radar
+  # T_applanix_lidar = dataset_odo.sequences[0].calib.T_applanix_lidar
+  # T_radar_lidar = dataset_odo.sequences[0].calib.T_radar_lidar
+  # T_applanix_radar = T_applanix_lidar @ get_inverse_tf(T_radar_lidar)
+  # T_robot_radar = T_axel_applanix @ T_applanix_radar
+
+  T_robot_radar = np.eye(4)
 
   # get bag file
   bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "odometry_result")

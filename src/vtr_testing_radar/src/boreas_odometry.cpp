@@ -83,9 +83,13 @@ EdgeTransform load_T_robot_radar(const fs::path &path) {
                     0, 0, 1, 1.45,
                     0, 0, 0, 1;
 
-  EdgeTransform T_robot_radar(Eigen::Matrix4d(T_axel_applanix * T_applanix_lidar_mat *
-                                              T_radar_lidar_mat.inverse()),
-                              Eigen::Matrix<double, 6, 6>::Zero());
+  // EdgeTransform T_robot_radar(Eigen::Matrix4d(T_axel_applanix * T_applanix_lidar_mat *
+  //                                             T_radar_lidar_mat.inverse()),
+  //                             Eigen::Matrix<double, 6, 6>::Zero());
+
+  Eigen::Matrix4d identity_matrix = Eigen::Matrix4d::Identity();
+  Eigen::Matrix<double, 6, 6> zero_cov = Eigen::Matrix<double, 6, 6>::Zero();
+  EdgeTransform T_robot_radar(identity_matrix, zero_cov);
 
   return T_robot_radar;
 }
@@ -113,8 +117,12 @@ EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name
                       0, 0, 1, 1.45,
                       0, 0, 0, 1;
   
-    T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_axel_applanix * T_applanix_dmu_mat),
-                                Eigen::Matrix<double, 6, 6>::Zero());
+    // T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_axel_applanix * T_applanix_dmu_mat),
+    //                             Eigen::Matrix<double, 6, 6>::Zero());
+    Eigen::Matrix4d identity_matrix = Eigen::Matrix4d::Identity();
+    Eigen::Matrix<double, 6, 6> zero_cov = Eigen::Matrix<double, 6, 6>::Zero();
+    EdgeTransform T_robot_imu(identity_matrix, zero_cov);
+
   } else if (imu_name == "aeva") {
     std::ifstream ifs1(path / "calib" / "T_applanix_aeva.txt", std::ios::in);
     Eigen::Matrix4d T_applanix_aeva_mat;
