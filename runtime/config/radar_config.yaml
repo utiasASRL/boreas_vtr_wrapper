@@ -231,7 +231,7 @@
         huber_delta: 1.0 # huber loss threshold for ICP
         cauchy_k: 0.8 # cauchy loss threshold for ICP, should be 1.0 unless using both yaw and vel meas, 0.8 for N2
         use_p2pl: false
-        w_icp_diag: [2.0, 2.0]
+        w_icp_diag: [1.0, 1.0]
         normal_score_threshold: 0.0
         remove_orientation: false
 
