@@ -22,6 +22,7 @@
         # "lidar.vertex_test",
         # "lidar.localization_map_recall",
         # "lidar.localization_icp",
+        # "pose_graph",
       ]
 
     ############ Boreas data configuration ############
