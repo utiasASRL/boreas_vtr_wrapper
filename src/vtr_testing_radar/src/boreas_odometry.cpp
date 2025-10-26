@@ -348,7 +348,7 @@ int main(int argc, char **argv) {
       return 1;
     }
     const auto imu_file_name = (imu_name == "imu") ? "imu_raw.csv" : (imu_name + "_imu.csv");
-    const auto imu_path = odo_dir / "applanix" / imu_file_name;
+    const auto imu_path = odo_dir / "imu" / imu_file_name;
     load_all_imu_meas(imu_path, all_imu_meas, imu_file_name);
     T_imu_robot = load_T_imu_robot(odo_dir, imu_name);
     CLOG(WARNING, "boreas_wrapper") << "Loaded " << all_imu_meas.size() << " IMU measurements";
