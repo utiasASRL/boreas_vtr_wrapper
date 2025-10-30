@@ -29,7 +29,7 @@
 
     ############ Boreas data configuration ############
     boreas:
-      radar_dir_name: "doppler_radar" # [radar, doppler_radar, range_corr_radar, az_doppler_radar]
+      radar_dir_name: "radar" # [radar, doppler_radar, range_corr_radar, az_doppler_radar]
       imu:
         use_imu: true
         imu_name: "dmu" # options are "dmu", "aeva", or "imu" (for applanix imu)
@@ -75,7 +75,7 @@
           "conversion",
           "extraction",
           "filtering",
-          # "doppler_extraction"
+          "doppler_extraction"
         ]
 
       odometry: [
