@@ -67,18 +67,15 @@ def main(dataset_dir, result_dir):
   # generate ground truth pose dictionary
   ground_truth_poses_odo = dict()
   for sequence in dataset_odo.sequences:
-    # Ground truth is provided w.r.t sensor, so we set sensor to vehicle
-    # transform to identity
-    yfwd2xfwd = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-
-    T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
-                              [-0.99955003, 0.0299955, 0., 0.0],
-                              [ 0, 0, 1, 1.45],
-                              [ 0, 0, 0, 1]])
-
+    # Ground truth is provided w.r.t sensor, so we want to get transfrom from sensor to robot (axel) frame
+    # TODO: Get T_applanix_axel from sequence directly after pyboreas changes
+    T_applanix_axel_file = os.path.join(dataset_dir, odo_input, "calib/T_applanix_axel.txt")
+    if not os.path.exists(T_applanix_axel_file):
+      print("File does not exist:", T_applanix_axel_file)
+      return
+    T_applanix_axel = np.loadtxt(T_applanix_axel_file)
+    T_axel_applanix = get_inverse_tf(T_applanix_axel)
     T_robot_lidar_odo = T_axel_applanix @ sequence.calib.T_applanix_lidar
-    # T_robot_lidar_odo = sequence.calib.T_applanix_lidar
-    T_lidar_robot_odo = get_inverse_tf(T_robot_lidar_odo)
 
     # build dictionary
     precision = 1e7  # divide by this number to ensure always find the timestamp
@@ -94,17 +91,14 @@ def main(dataset_dir, result_dir):
     # generate ground truth pose dictionary
     ground_truth_poses_loc = dict()
     for sequence in dataset_loc.sequences:
-      # Ground truth is provided w.r.t sensor, so we set sensor to vehicle
-      # transform to identity
-      yfwd2xfwd = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-
-      T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
-                                [-0.99955003, 0.0299955, 0., 0.0],
-                                [ 0, 0, 1, 1.45],
-                                [ 0, 0, 0, 1]])
-
+      # Ground truth is provided w.r.t sensor, so we want to get transform from sensor to robot (axel) frame
+      T_applanix_axel_file = os.path.join(dataset_dir, loc_input, "calib/T_applanix_axel.txt")
+      if not os.path.exists(T_applanix_axel_file):
+        print("File does not exist:", T_applanix_axel_file)
+        return
+      T_applanix_axel = np.loadtxt(T_applanix_axel_file)
+      T_axel_applanix = get_inverse_tf(T_applanix_axel)
       T_robot_lidar_loc = T_axel_applanix @ sequence.calib.T_applanix_lidar
-      # T_robot_lidar_loc = sequence.calib.T_applanix_lidar
       T_lidar_robot_loc = get_inverse_tf(T_robot_lidar_loc)
 
       # build dictionary
