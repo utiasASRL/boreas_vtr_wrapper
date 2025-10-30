@@ -90,37 +90,35 @@ std::pair<int64_t, Eigen::MatrixXd> load_lidar(const std::string &path) {
   return std::make_pair(timestamp, std::move(pc));
 }
 
-EdgeTransform load_T_robot_lidar(const fs::path &path) {
-#if true
-  std::ifstream ifs(path / "calib" / "T_applanix_lidar.txt", std::ios::in);
+Eigen::Matrix4d load_T_axel_applanix(const fs::path &path) {
+  std::ifstream ifs(path / "calib" / "T_applanix_axel.txt", std::ios::in);
+  if (!ifs.is_open()) {
+    CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_axel.txt";
+    throw std::invalid_argument("File not found: " + (path / "calib" / "T_applanix_axel.txt").string());
+  }
+  Eigen::Matrix4d T_applanix_axel_mat;
+  for (size_t row = 0; row < 4; row++)
+    for (size_t col = 0; col < 4; col++) ifs >> T_applanix_axel_mat(row, col);
+  
+  return T_applanix_axel_mat.inverse();
+}
 
+EdgeTransform load_T_robot_lidar(const fs::path &path) {
+  std::ifstream ifs(path / "calib" / "T_applanix_lidar.txt", std::ios::in);
+  if (!ifs.is_open()) {
+    CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_lidar.txt";
+    throw std::invalid_argument("File not found: " + (path / "calib" / "T_applanix_lidar.txt").string());
+  }
   Eigen::Matrix4d T_applanix_lidar_mat;
   for (size_t row = 0; row < 4; row++)
     for (size_t col = 0; col < 4; col++) ifs >> T_applanix_lidar_mat(row, col);
+
   // Extrinsic from lidar to rear axel
-  Eigen::Matrix4d T_axel_applanix;
   // Want to estimate at rear axel, this transform has x forward, y right, z down
-  T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
-                    -0.99955003, 0.0299955, 0, 0.0,
-                    0, 0, 1, 1.45,
-                    0, 0, 0, 1;
+  Eigen::Matrix4d T_axel_applanix = load_T_axel_applanix(path);
 
   EdgeTransform T_robot_lidar(Eigen::Matrix4d(T_axel_applanix * T_applanix_lidar_mat),
                               Eigen::Matrix<double, 6, 6>::Zero());
-
-#else
-  Eigen::Matrix4d T_robot_lidar_mat;
-  // clang-format off
-  /// results from HERO paper
-  T_robot_lidar_mat <<  0.68297386,  0.73044281,  0.        ,  0.26      ,
-                       -0.73044281,  0.68297386,  0.        ,  0.        ,
-                        0.        ,  0.        ,  1.        , -0.21      ,
-                        0.        ,  0.        ,  0.        ,  1.        ;
-
-  // clang-format on
-  EdgeTransform T_robot_lidar(T_robot_lidar_mat,
-                              Eigen::Matrix<double, 6, 6>::Zero());
-#endif
 
   return T_robot_lidar;
 }
@@ -131,22 +129,14 @@ EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name
     std::ifstream ifs1(path / "calib" / "T_applanix_dmu.txt", std::ios::in);
     Eigen::Matrix4d T_applanix_dmu_mat;
     if (!ifs1.is_open()) {
-      CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_dmu.txt. Loading preset.";
-      T_applanix_dmu_mat << 1.0,  0.0,  0.0,  0.0,
-                            0.0, -1.0,  0.0,  0.0,
-                            0.0,  0.0, -1.0, -0.15,
-                            0.0,  0.0,  0.0,  1.0;
+      CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_dmu.txt";
+      throw std::invalid_argument("File not found: " + (path / "calib" / "T_applanix_dmu.txt").string());
     } else {
       for (size_t row = 0; row < 4; row++)
         for (size_t col = 0; col < 4; col++) ifs1 >> T_applanix_dmu_mat(row, col);
     }
     // Extrinsic from applanix to rear axel
-    Eigen::Matrix4d T_axel_applanix;
-    // Want to estimate at rear axel
-    T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
-                      -0.99955003, 0.0299955, 0, 0.0,
-                      0, 0, 1, 1.45,
-                      0, 0, 0, 1;
+    Eigen::Matrix4d T_axel_applanix = load_T_axel_applanix(path);
   
     T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_axel_applanix * T_applanix_dmu_mat),
                                 Eigen::Matrix<double, 6, 6>::Zero());
@@ -163,12 +153,7 @@ EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name
                         0.0, 0.0, 0.0, 1.0;
 
     // Extrinsic from applanix to rear axel
-    Eigen::Matrix4d T_axel_applanix;
-    // Want to estimate at rear axel
-    T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
-                      -0.99955003, 0.0299955, 0, 0.0,
-                      0, 0, 1, 1.45,
-                      0, 0, 0, 1;
+    Eigen::Matrix4d T_axel_applanix = load_T_axel_applanix(path);
   
     T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_axel_applanix * T_applanix_aeva_mat *
                                 T_imu_aeva_mat.inverse()),
@@ -183,12 +168,7 @@ EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name
                       0, 0, 0, 1;
 
     // Extrinsic from applanix to rear axel
-    Eigen::Matrix4d T_axel_applanix;
-    // Want to estimate at rear axel
-    T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
-                      -0.99955003, 0.0299955, 0, 0.0,
-                      0, 0, 1, 1.45,
-                      0, 0, 0, 1;
+    Eigen::Matrix4d T_axel_applanix = load_T_axel_applanix(path);
   
     T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_axel_applanix * T_imu_applanix.inverse()),
                                 Eigen::Matrix<double, 6, 6>::Zero());
@@ -197,7 +177,6 @@ EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name
     return EdgeTransform();
   }
 
-  
   return T_robot_imu.inverse();
 }
 
@@ -258,12 +237,7 @@ EdgeTransform load_T_wheel_robot(const fs::path &path) {
     for (size_t col = 0; col < 4; col++) ifs2 >> T_applanix_wheel_mat(row, col);
 
   // Extrinsic from wheel to rear axel
-  Eigen::Matrix4d T_axel_applanix;
-  // Want to estimate at rear axel
-  T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
-                    -0.99955003, 0.0299955, 0, 0.0,
-                     0, 0, 1, 1.45,
-                     0, 0, 0, 1;      
+  Eigen::Matrix4d T_axel_applanix = load_T_axel_applanix(path);
 
   EdgeTransform T_wheel_robot(Eigen::Matrix4d((T_axel_applanix * T_applanix_wheel_mat).inverse()),
                               Eigen::Matrix<double, 6, 6>::Zero());
@@ -368,7 +342,11 @@ int main(int argc, char **argv) {
       return 1;
     }
     const auto imu_file_name = (imu_name == "imu") ? "imu_raw.csv" : (imu_name + "_imu.csv");
-    const auto imu_path = odo_dir / "applanix" / imu_file_name;
+    const auto imu_path = odo_dir / "imu" / imu_file_name;
+    if (!fs::exists(imu_path)) {
+      CLOG(ERROR, "boreas_wrapper") << "IMU file does not exist: " << imu_path.string();
+      return 1;
+    }
     load_all_imu_meas(imu_path, all_imu_meas, imu_file_name);
     T_imu_robot = load_T_imu_robot(odo_dir, imu_name);
     CLOG(WARNING, "boreas_wrapper") << "Loaded " << all_imu_meas.size() << " IMU measurements";
@@ -475,18 +453,6 @@ int main(int argc, char **argv) {
     // Feed in IMU data if available/desired
     std::vector<sensor_msgs::msg::Imu> gyro_msgs;
     if (use_imu) {
-      ///////////////* TEMP CALCULATION - REMOVE AFTER TESTING *///////////////
-      std::vector<double> differences;
-      for (size_t i = 1; i < all_imu_meas.size(); ++i) {
-        differences.push_back(all_imu_meas[i].timestamp_ns / 1e9 - all_imu_meas[i - 1].timestamp_ns / 1e9);
-      }
-      std::sort(differences.begin(), differences.end());
-      double median = differences[differences.size() / 2];
-      CLOG(DEBUG, "boreas_wrapper") << "Median time difference between IMU measurements: " << median;
-      double min_bias_init_count = 1.0 / median;
-      CLOG(DEBUG, "boreas_wrapper") << "Minimum bias initialization count: " << min_bias_init_count;
-      ///////////////* TEMP CALCULATION - REMOVE AFTER TESTING *///////////////
-
       int64_t timestamp_imu = all_imu_meas[imu_counter].timestamp_ns;
       int64_t start_timestamp = points(0, 5) * 1.0e9;
       int64_t end_timestamp = points(points.rows() - 1, 5) * 1.0e9;
