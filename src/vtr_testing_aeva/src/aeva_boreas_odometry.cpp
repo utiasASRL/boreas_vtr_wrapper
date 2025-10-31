@@ -248,9 +248,9 @@ void load_all_imu_meas(const fs::path &imu_meas_file, std::vector<IMUMeasurement
 
 EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name) {
   // Extrinsic from applanix to rear axel of the vehicle
-  std::ifstream ifs2(path / "calib" / "T_applanix_axel.txt", std::ios::in);
+  std::ifstream ifs_rob(path / "calib" / "T_applanix_axel.txt", std::ios::in);
   Eigen::Matrix4d T_applanix_axel_mat;
-  if (!ifs2.is_open()) {
+  if (!ifs_rob.is_open()) {
     CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_axel.txt. Loading preset.";
     T_applanix_axel_mat << 
       0.0299955, -0.99955003, 0.0,  0.0,
@@ -259,7 +259,7 @@ EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name
       0.0,        0.0,        0.0,  1.0;
   } else {
     for (size_t row = 0; row < 4; row++)
-      for (size_t col = 0; col < 4; col++) ifs2 >> T_applanix_axel_mat(row, col);
+      for (size_t col = 0; col < 4; col++) ifs_rob >> T_applanix_axel_mat(row, col);
   }
 
   EdgeTransform T_robot_imu;
@@ -300,9 +300,9 @@ EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name
     CLOG(WARNING, "boreas_wrapper") << "T_applanix_aeva_mat: " << T_applanix_aeva_mat;
 
     // Extrinsic from aeva imu to aeva
-    std::ifstream ifs1(path / "calib" / "T_imu_aeva.txt", std::ios::in);
+    std::ifstream ifs2(path / "calib" / "T_imu_aeva.txt", std::ios::in);
     Eigen::Matrix4d T_imu_aeva_mat;
-    if (!ifs1.is_open()) {
+    if (!ifs2.is_open()) {
       CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_imu_aeva.txt. Loading preset.";
       T_imu_aeva_mat << 
         1.0, 0.0, 0.0, -0.020,
@@ -311,7 +311,7 @@ EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name
         0.0, 0.0, 0.0,  1.0;
     } else {
       for (size_t row = 0; row < 4; row++)
-        for (size_t col = 0; col < 4; col++) ifs1 >> T_imu_aeva_mat(row, col);
+        for (size_t col = 0; col < 4; col++) ifs2 >> T_imu_aeva_mat(row, col);
     }
   
     T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_applanix_axel_mat.inverse() * T_applanix_aeva_mat * T_imu_aeva_mat.inverse()),
@@ -338,10 +338,10 @@ EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name
 
 EdgeTransform load_T_wheel_robot(const fs::path &path) {
   // Extrinsic from applanix to wheel encoder (left rear wheel)
-  std::ifstream ifs2(path / "calib" / "T_applanix_wheel.txt", std::ios::in);
+  std::ifstream ifs1(path / "calib" / "T_applanix_wheel.txt", std::ios::in);
   Eigen::Matrix4d T_applanix_wheel_mat;
   for (size_t row = 0; row < 4; row++)
-    for (size_t col = 0; col < 4; col++) ifs2 >> T_applanix_wheel_mat(row, col);
+    for (size_t col = 0; col < 4; col++) ifs1 >> T_applanix_wheel_mat(row, col);
 
   // Extrinsic from applanix to rear axel of the vehicle
   std::ifstream ifs2(path / "calib" / "T_applanix_axel.txt", std::ios::in);
