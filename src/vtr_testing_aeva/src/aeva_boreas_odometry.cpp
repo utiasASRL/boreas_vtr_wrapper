@@ -26,23 +26,6 @@ using namespace vtr::logging;
 using namespace vtr::tactic;
 using namespace vtr::testing;
 
-Eigen::MatrixXd readCSVtoEigenXd(std::ifstream &csv) {
-  std::string line;
-  std::string cell;
-  std::vector<std::vector<double>> mat_vec;
-  while (std::getline(csv, line)) {
-    std::stringstream lineStream(line);
-    std::vector<double> row_vec;
-    while (std::getline(lineStream, cell, ',')) {
-      row_vec.push_back(std::stof(cell));
-    }
-    mat_vec.push_back(row_vec);
-  }
-  Eigen::MatrixXd output = Eigen::MatrixXd(mat_vec.size(), mat_vec[0].size());
-  for (int i = 0; i < (int)mat_vec.size(); ++i) output.row(i) = Eigen::VectorXd::Map(&mat_vec[i][0], mat_vec[i].size());
-  return output;
-}
-
 int64_t stringToNanoseconds(const std::string &timestamp_str) {
   size_t dot_pos = timestamp_str.find('.');
   std::string sec_str = timestamp_str.substr(0, dot_pos);
@@ -85,125 +68,7 @@ int64_t getStampFromPath(const std::string &path) {
   return time1 * 1000;
 }
 
-std::vector<Eigen::MatrixXd> loadElevationOrder(const std::string &bo_path) {
-  // load values for computing line id from elevation
-  std::vector<Eigen::MatrixXd> elevation_order_by_beam_id_;
-
-  // read elevation settings
-  std::string path = bo_path; // + "/mean_elevation_beam_order_0";
-  std::ifstream csv(path);
-  if (!csv) throw std::ios::failure("Error opening csv file");
-  Eigen::MatrixXd elevation_order = readCSVtoEigenXd(csv);
-
-  for (int j = 0; j < 4; ++j) {   // 4 beams   
-    Eigen::MatrixXd elevation_order_for_this_beam(elevation_order.rows()/4, 2);  // first column is mean elevation, second column is row id
-    int h = 0;
-    for (int r = 0; r < elevation_order.rows(); ++r) {
-      // first column is mean elevation. Second column is beam id
-      if (elevation_order(r, 1) == j) {
-        elevation_order_for_this_beam(h, 0) = elevation_order(r, 0);
-        elevation_order_for_this_beam(h, 1) = r;
-        ++h;
-      }
-    } // end for r
-    assert(h == elevation_order.rows()/4);
-    elevation_order_by_beam_id_.push_back(elevation_order_for_this_beam);
-  } // end for j
-  assert(elevation_order_by_beam_id_.size() == 4); // 4 beams
-
-  return elevation_order_by_beam_id_;
-}
-
-std::pair<int64_t, Eigen::MatrixXd> load_lidar(const std::string &path, const std::string &bo_path, double start_time, double end_time, int64_t filename) {
-  // load Aeries I pointcloud
-  std::ifstream ifs(path, std::ios::binary);
-  std::vector<char> buffer(std::istreambuf_iterator<char>(ifs), {});
-  unsigned float_offset = 4; // float32
-  unsigned fields = 7;  // x, y, z, i, r, t, b
-  unsigned point_step = float_offset * fields;
-  unsigned N = floor(buffer.size() / point_step);
-
-  std::vector<Eigen::VectorXd> points; // Vector to store valid points dynamically
-
-  auto getFloatFromByteArray = [](char *byteArray, unsigned index) -> float {
-    return *((float *)(byteArray + index));
-  };
-
-  auto elevation_order = loadElevationOrder(bo_path);
-
-  for (unsigned i(0); i < N; i++) {
-    int bufpos = i * point_step;
-    int offset = 0;
-
-    // Temporary variables
-    double x, y, z, radial_velocity, intensity, time_temp;
-    int64_t time_keep;
-    int beam_id, line_id, face_id, sensor_id;
-
-    // x, y, z
-    x = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
-    ++offset;
-    y = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
-    ++offset;
-    z = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
-    
-    ++offset;
-    // Intensity
-    intensity = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
-    ++offset;
-    // Radial velocity
-    radial_velocity = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
-    ++offset;
-    // Timestamp
-    time_temp = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset); // sec
-    double t = double(filename / 1000) * 1.0e-6;
-    time_keep = (int64_t)((time_temp + t) * 1e9);
-    time_temp = time_temp + start_time;
-    ++offset;
-    // Beam id
-    beam_id = (int)(getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset));
-    // Face id - 0 because not available on aeries I
-    face_id = 0;
-    // Sensor id
-    sensor_id = 0;
-
-    // compute elevation
-    const double xy = sqrt(x*x + y*y);
-    const double elevation = atan2(z, xy);
-    
-    // determine row by matching by beam_id (0, 1, 2, or 3) and closest elevation to precalculated values
-    // note: elevation_order_by_beam_id_[point.beam_id] first column is mean elevation, second column is row id
-    const auto ele_diff = elevation_order[beam_id].col(0).array() - elevation;
-    double min_val = ele_diff(0)*ele_diff(0);
-    size_t min_id = 0;
-    for (size_t i = 1; i < ele_diff.rows(); ++i) {
-      const auto val = ele_diff(i) * ele_diff(i);
-      if (val < min_val) {
-        min_val = val;
-        min_id = i;
-      }
-    }
-
-    line_id = elevation_order[beam_id](min_id, 1);
-
-    // Include if within start and end time
-    if (time_temp > start_time && time_temp <= end_time) {
-        Eigen::VectorXd point(10);
-        //std::cout << "time_keep: " << time_keep << std::endl;
-        point << x, y, z, radial_velocity, intensity, time_keep, beam_id, line_id, face_id, sensor_id;
-        points.push_back(point);
-    }
-  }
-
-  // Convert vector to Eigen::MatrixXd
-  Eigen::MatrixXd pc(points.size(), 10);
-  for (size_t k = 0; k < points.size(); ++k) {
-    pc.row(k) = points[k];
-  }
-  return std::make_pair(fields, pc);
-}
-
-std::pair<int64_t, Eigen::MatrixXd> load_new_lidar(const std::string &path, double start_time, double end_time, int64_t filename) {
+std::pair<int64_t, Eigen::MatrixXd> load_lidar(const std::string &path, double start_time, double end_time, int64_t filename) {
   // load Aeries II pointcloud
   std::ifstream ifs(path, std::ios::binary);
   std::vector<char> buffer(std::istreambuf_iterator<char>(ifs), {});
@@ -284,7 +149,7 @@ std::pair<int64_t, Eigen::MatrixXd> load_new_lidar(const std::string &path, doub
   return std::make_pair(fields, pc);
 }
 
-EdgeTransform load_T_lidar_robot(const fs::path &path, bool new_lidar) {
+EdgeTransform load_T_lidar_robot(const fs::path &path) {
   std::ifstream ifs1(path / "calib" / "T_applanix_aeva.txt", std::ios::in);
 
   Eigen::Matrix4d T_applanix_aeva_mat;
@@ -630,18 +495,11 @@ int main(int argc, char **argv) {
   tactic->setPipeline(PipelineMode::TeachBranch);
   tactic->addRun();
 
-  // KTODO: move to preprocessing - maybe keep bias here and make cov a parameter
-  const auto sensor_config_path = node->declare_parameter<std::string>("boreas.root_path", "/home/");
-  const auto aeriesII = node->declare_parameter<bool>("boreas.aeriesII", false);
-
-  CLOG(WARNING, "boreas_wrapper") << "Sensor config path: " << sensor_config_path;
-  CLOG(WARNING, "boreas_wrapper") << "Aeries II: " << aeriesII;
-
   // Frame and transforms
   std::string robot_frame = "robot";
   std::string lidar_frame = "lidar";
 
-  const auto T_lidar_robot = load_T_lidar_robot(odo_dir, aeriesII);
+  const auto T_lidar_robot = load_T_lidar_robot(odo_dir);
   CLOG(WARNING, "boreas_wrapper") << "Transform from " << robot_frame << " to "
                         << lidar_frame << " has been set to" << T_lidar_robot;
 
@@ -719,16 +577,9 @@ int main(int argc, char **argv) {
     }
     int64_t start_name = filename;
     
-    double dt = 0;
     Eigen::MatrixXd points;
-    if (aeriesII) {
-      // load Aeries II boreas pointcloud
-      std::tie(std::ignore, points) = load_new_lidar(it->path().string(), start_time, end_time, start_name);
-    } else {
-      dt = 0.1; // aeries I gyro time sync ~0.1s off
-      // load Aeries I boreas pointcloud
-      auto [fields, points] = load_lidar(it->path().string(), sensor_config_path, start_time, end_time, start_name);
-    }
+    // load Aeries II boreas pointcloud
+    std::tie(std::ignore, points) = load_lidar(it->path().string(), start_time, end_time, start_name);
 
     if (points.rows() == 0) {
       CLOG(WARNING, "boreas_wrapper") << "No points found in frame " << frame;
@@ -736,6 +587,7 @@ int main(int argc, char **argv) {
       ++frame;
       continue;
     }
+
     // publish clock for sim time
     auto time_msg = rosgraph_msgs::msg::Clock();
     time_msg.clock = rclcpp::Time(start_name);
@@ -821,6 +673,7 @@ int main(int argc, char **argv) {
     if (gyro_msgs.size() > 0) {
       query_data->T_s_r_gyro.emplace(T_imu_robot);
       query_data->gyro_msgs.emplace(gyro_msgs);
+      query_data->gyro_bias.emplace(gyro_bias);
     }
 
     // set wheel encoder messages
