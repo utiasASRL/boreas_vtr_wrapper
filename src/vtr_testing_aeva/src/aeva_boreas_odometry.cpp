@@ -612,9 +612,9 @@ int main(int argc, char **argv) {
       Eigen::Matrix<double, 4, 1> imu_meas;
       while (imu_counter < all_imu_meas.size() && all_imu_meas[imu_counter].timestamp_ns < end_timestamp) {
         auto gyro_msg = sensor_msgs::msg::Imu();
-        gyro_msg.angular_velocity.x = all_imu_meas[imu_counter].angvel_x - gyro_bias.x();
-        gyro_msg.angular_velocity.y = all_imu_meas[imu_counter].angvel_y - gyro_bias.y();
-        gyro_msg.angular_velocity.z = all_imu_meas[imu_counter].angvel_z - gyro_bias.z();
+        gyro_msg.angular_velocity.x = all_imu_meas[imu_counter].angvel_x;
+        gyro_msg.angular_velocity.y = all_imu_meas[imu_counter].angvel_y;
+        gyro_msg.angular_velocity.z = all_imu_meas[imu_counter].angvel_z;
         gyro_msg.header.stamp = rclcpp::Time(all_imu_meas[imu_counter].timestamp_ns);
         gyro_msgs.push_back(gyro_msg);
         ++imu_counter;
