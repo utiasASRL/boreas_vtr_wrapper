@@ -74,20 +74,8 @@ def main(dataset_dir, result_dir, velocity):
     return
   print("Looking at result data directory:", data_dir)
 
-  T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
-                            [-0.99955003, 0.0299955, 0., 0.0],
-                            [ 0, 0, 1, 1.45],
-                            [ 0, 0, 0, 1]])
-  # T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
-  #                           [0.99955003, -0.0299955, 0., 0.0],
-  #                           [ 0, 0, 1, 0.0],
-  #                           [ 0, 0, 0, 1]])
-
-  # T_applanix_lidar = dataset_odo.sequences[0].calib.T_applanix_lidar
-  # T_radar_lidar = dataset_odo.sequences[0].calib.T_radar_lidar
-  # T_applanix_radar = T_applanix_lidar @ get_inverse_tf(T_radar_lidar)
-  # T_robot_radar = T_axel_applanix @ T_applanix_radar
-
+  # Using radar frame as robot frame for SE(2) radar odometry
+  # This was approved by Tim in October 2025
   T_robot_radar = np.eye(4)
 
   # get bag file
