@@ -117,12 +117,11 @@ def main(dataset_dir, result_dir, velocity):
       w_v_r_robot[4] = message[1].angular.y
       w_v_r_robot[5] = message[1].angular.z
 
-      w_r_v_lidar = np.zeros((6))
-      w_r_v_lidar[:3] = (- w_v_r_robot[:3].reshape(1, 3) @ T_robot_applanix[:3, :3]).flatten()
-      w_r_v_lidar[3:] = (- w_v_r_robot[3:].reshape(1, 3) @ T_robot_applanix[:3, :3]).flatten()
+      # Transform velocity from robot to applanix frame/origin (lidar results are in applanix frame)
+      w_a_v_applanix = - se3op.tranAd(get_inverse_tf(T_robot_applanix)) @ w_v_r_robot.reshape(6, 1)
 
       timestamp = int(int(message[0]) / 1000)
-      vel_results.append([timestamp] + w_r_v_lidar.flatten().tolist())
+      vel_results.append([timestamp] + w_a_v_applanix.flatten().tolist())
 
   output_dir = osp.join(result_dir, "odometry_result")
   os.makedirs(output_dir, exist_ok=True)
