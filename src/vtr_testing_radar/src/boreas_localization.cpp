@@ -302,6 +302,39 @@ EdgeTransform load_T_enu_radar_init(const fs::path &path, const bool &reverse) {
   return T;
 }
 
+double roundToPi(double value) {
+    return std::round(value / M_PI) * M_PI;
+}
+
+void load_groundtruth(const fs::path &path, std::vector<lgmath::se3::Transformation> &all_gt_poses, std::vector<Eigen::Vector<double, 6>> &all_gt_vels) {
+  std::ifstream ifs(path / "applanix" / "radar_poses.csv", std::ios::in);
+  // Clear header line
+  std::string line;
+  std::getline(ifs, line);
+  // Loop through all gt data
+  while (std::getline(ifs, line)) {
+    std::stringstream ss(line);
+    std::vector<double> gt;
+    for (std::string str; std::getline(ss, str, ',');)
+      gt.push_back(std::stod(str));
+
+    // Store gt pose
+    Eigen::Matrix4d T_ab_mat = Eigen::Matrix4d::Identity();
+    T_ab_mat.block<3, 3>(0, 0) = rpy2rot(roundToPi(gt[7]), roundToPi(gt[8]), gt[9]);
+    T_ab_mat.block<3, 1>(0, 3) << gt[1], gt[2], 0.0;
+    lgmath::se3::Transformation T_ab = lgmath::se3::Transformation(T_ab_mat);
+    all_gt_poses.push_back(T_ab.inverse());
+
+    // Store gt velocity
+    Eigen::Vector<double, 3> vbar;
+    vbar << gt[4], gt[5], gt[6];
+    vbar = T_ab_mat.block<3, 3>(0, 0).transpose() * vbar;
+    Eigen::Vector<double, 6> body_rate;
+    body_rate << vbar[0], vbar[1], 0.0, 0.0, 0.0, gt[10];
+    all_gt_vels.push_back(-body_rate);
+  }
+}
+
 void load_radar_time_span(const cv::Mat &raw_data, int64_t &start_time, int64_t &final_time) {
   const uint N = raw_data.rows;  
   start_time = *((int64_t *)(raw_data.ptr<uchar>(0))) * 1000;
@@ -371,7 +404,7 @@ int main(int argc, char **argv) {
       return 1;
     }
     const auto imu_file_name = (imu_name == "imu") ? "imu_raw.csv" : (imu_name + "_imu.csv");
-    const auto imu_path = loc_dir / "applanix" / imu_file_name;
+    const auto imu_path = loc_dir / "imu" / imu_file_name;
     load_all_imu_meas(imu_path, all_imu_meas, imu_file_name);
     T_imu_robot = load_T_imu_robot(loc_dir, imu_name);
     CLOG(WARNING, "boreas_wrapper") << "Loaded " << all_imu_meas.size() << " IMU measurements";
@@ -486,6 +519,19 @@ int main(int argc, char **argv) {
   CLOG(WARNING, "boreas_wrapper") << "Found " << files.size() << " radar data";
   const auto start_frame = node->declare_parameter<int>("odometry.start_frame", 0);
   const auto end_frame = node->declare_parameter<int>("odometry.end_frame", -1);
+
+  // Load in groundtruth data
+  const auto load_gt = node->declare_parameter<bool>("boreas.load_gt", true);
+  CLOG(WARNING, "boreas_wrapper") << "Load groundtruth: " << load_gt;
+  std::vector<lgmath::se3::Transformation> T_rad_world_gt;
+  std::vector<Eigen::Vector<double, 6>> v_rad_gt;
+  // Reserve space
+  T_rad_world_gt.reserve(files.size());
+  v_rad_gt.reserve(files.size());
+  if (load_gt) {
+    load_groundtruth(loc_dir, T_rad_world_gt, v_rad_gt);
+    CLOG(WARNING, "boreas_wrapper") << "Loaded groundtruth for " << T_rad_world_gt.size() << " frames";
+  }
 
   // thread handling variables
   TestControl test_control(node);
@@ -615,6 +661,12 @@ int main(int argc, char **argv) {
     if (wheel_meas.size() > 0) {
       query_data->T_s_r_wheel.emplace(T_wheel_robot);
       query_data->wheel_meas.emplace(wheel_meas);
+    }
+
+    // Set groundtruth if loaded
+    if (load_gt && frame < T_rad_world_gt.size()) {
+      query_data->T_s_world_gt.emplace(T_rad_world_gt[frame]);
+      query_data->v_s_gt.emplace(v_rad_gt[frame]);
     }
     
     // Add sequence name to query data

@@ -11,6 +11,7 @@
 #include "vtr_tactic/pipelines/factory.hpp"
 #include "vtr_tactic/rviz_tactic_callback.hpp"
 #include "vtr_tactic/tactic.hpp"
+#include <lgmath/se3/Transformation.hpp>
 
 #include "vtr_testing_lidar/utils.hpp"
 
@@ -285,6 +286,61 @@ void load_wheel_encoder_data(const fs::path &path, const int encoder_max, std::v
   }
 }
 
+Eigen::Matrix3d toRoll(const double &r) {
+  Eigen::Matrix3d roll;
+  roll << 1, 0, 0, 0, cos(r), sin(r), 0, -sin(r), cos(r);
+  return roll;
+}
+
+Eigen::Matrix3d toPitch(const double &p) {
+  Eigen::Matrix3d pitch;
+  pitch << cos(p), 0, -sin(p), 0, 1, 0, sin(p), 0, cos(p);
+  return pitch;
+}
+
+Eigen::Matrix3d toYaw(const double &y) {
+  Eigen::Matrix3d yaw;
+  yaw << cos(y), sin(y), 0, -sin(y), cos(y), 0, 0, 0, 1;
+  return yaw;
+}
+
+Eigen::Matrix3d rpy2rot(const double &r, const double &p, const double &y) {
+  return toRoll(r) * toPitch(p) * toYaw(y);
+}
+
+double roundToPi(double value) {
+    return std::round(value / M_PI) * M_PI;
+}
+
+void load_groundtruth(const fs::path &path, std::vector<lgmath::se3::Transformation> &all_gt_poses, std::vector<Eigen::Vector<double, 6>> &all_gt_vels) {
+  std::ifstream ifs(path / "applanix" / "lidar_poses.csv", std::ios::in);
+  // Clear header line
+  std::string line;
+  std::getline(ifs, line);
+  // Loop through all gt data
+  while (std::getline(ifs, line)) {
+    std::stringstream ss(line);
+    std::vector<double> gt;
+    for (std::string str; std::getline(ss, str, ',');)
+      gt.push_back(std::stod(str));
+
+    // Store gt pose
+    Eigen::Matrix4d T_ab_mat = Eigen::Matrix4d::Identity();
+    T_ab_mat.block<3, 3>(0, 0) = rpy2rot(gt[7], gt[8], gt[9]);
+    T_ab_mat.block<3, 1>(0, 3) << gt[1], gt[2], gt[3];
+    lgmath::se3::Transformation T_ab = lgmath::se3::Transformation(T_ab_mat);
+    all_gt_poses.push_back(T_ab.inverse());
+
+    // Store gt velocity
+    Eigen::Vector<double, 3> vbar;
+    vbar << gt[4], gt[5], gt[6];
+    vbar = T_ab_mat.block<3, 3>(0, 0).transpose() * vbar;
+    Eigen::Vector<double, 6> body_rate;
+    body_rate << vbar[0], vbar[1], vbar[2], gt[12], gt[11], gt[10];
+    all_gt_vels.push_back(-body_rate);
+  }
+}
+
 int main(int argc, char **argv) {
   // disable eigen multi-threading
   Eigen::setNbThreads(1);
@@ -416,6 +472,19 @@ int main(int argc, char **argv) {
   const auto start_frame = node->declare_parameter<int>("boreas.odometry.start_frame", 0);
   const auto end_frame = node->declare_parameter<int>("boreas.odometry.end_frame", -1);
 
+  // Load in groundtruth data
+  const auto load_gt = node->declare_parameter<bool>("boreas.load_gt", true);
+  CLOG(WARNING, "boreas_wrapper") << "Load groundtruth: " << load_gt;
+  std::vector<lgmath::se3::Transformation> T_rad_world_gt;
+  std::vector<Eigen::Vector<double, 6>> v_rad_gt;
+  // Reserve space
+  T_rad_world_gt.reserve(files.size());
+  v_rad_gt.reserve(files.size());
+  if (load_gt) {
+    load_groundtruth(odo_dir, T_rad_world_gt, v_rad_gt);
+    CLOG(WARNING, "boreas_wrapper") << "Loaded groundtruth for " << T_rad_world_gt.size() << " frames";
+  }
+
   // thread handling variables
   TestControl test_control(node);
 
@@ -536,6 +605,12 @@ int main(int argc, char **argv) {
     if (wheel_meas.size() > 0) {
       query_data->T_s_r_wheel.emplace(T_wheel_robot);
       query_data->wheel_meas.emplace(wheel_meas);
+    }
+
+    // Set groundtruth if loaded
+    if (load_gt && frame < T_rad_world_gt.size()) {
+      query_data->T_s_world_gt.emplace(T_rad_world_gt[frame]);
+      query_data->v_s_gt.emplace(v_rad_gt[frame]);
     }
 
     // execute the pipeline
