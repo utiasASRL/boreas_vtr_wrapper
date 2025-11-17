@@ -3,7 +3,7 @@
     ############ system configuration ############
     # Data logging
     log_to_file: true
-    log_debug: true
+    log_debug: false
     log_enabled: [
         ## ADD LOGGER IDS HERE
         # tactic
@@ -16,6 +16,7 @@
         # "lidar.pipeline",
         # "lidar.velodyne_converter",
         # "lidar.preprocessing",
+        # "lidar.odometry_gt",
         # "lidar.odometry_icp",
         # "lidar.odometry_wheel",
         # "lidar.odometry_map_maintenance",
@@ -27,6 +28,7 @@
 
     ############ Boreas data configuration ############
     boreas:
+      load_gt: false
       imu:
         use_imu: true
         imu_name: "dmu" # options are "dmu", "aeva", or "imu" (for applanix imu)
@@ -76,6 +78,7 @@
       odometry: [
           # odometry and mapping thread modules
           "icp",
+          # "gt",
           # "wheel",
           "mapping",
           "vertex_test",
@@ -129,6 +132,11 @@
         visualize: false
 
     odometry:
+      gt:
+        type: lidar.odometry_gt
+        num_threads: 10
+        traj_qc_diag: [1.0, 0.1, 0.1, 0.1, 0.1, 1.0]
+
       icp:
         type: lidar.odometry_icp
 
