@@ -331,6 +331,35 @@ EdgeTransform load_T_enu_lidar_init(const fs::path &path, const bool &reverse) {
   return T;
 }
 
+void load_groundtruth(const fs::path &path, std::vector<lgmath::se3::Transformation> &all_gt_poses, std::vector<Eigen::Vector<double, 6>> &all_gt_vels) {
+  std::ifstream ifs(path / "applanix" / "lidar_poses.csv", std::ios::in);
+  // Clear header line
+  std::string line;
+  std::getline(ifs, line);
+  // Loop through all gt data
+  while (std::getline(ifs, line)) {
+    std::stringstream ss(line);
+    std::vector<double> gt;
+    for (std::string str; std::getline(ss, str, ',');)
+      gt.push_back(std::stod(str));
+
+    // Store gt pose
+    Eigen::Matrix4d T_ab_mat = Eigen::Matrix4d::Identity();
+    T_ab_mat.block<3, 3>(0, 0) = rpy2rot(gt[7], gt[8], gt[9]);
+    T_ab_mat.block<3, 1>(0, 3) << gt[1], gt[2], gt[3];
+    lgmath::se3::Transformation T_ab = lgmath::se3::Transformation(T_ab_mat);
+    all_gt_poses.push_back(T_ab.inverse());
+
+    // Store gt velocity
+    Eigen::Vector<double, 3> vbar;
+    vbar << gt[4], gt[5], gt[6];
+    vbar = T_ab_mat.block<3, 3>(0, 0).transpose() * vbar;
+    Eigen::Vector<double, 6> body_rate;
+    body_rate << vbar[0], vbar[1], vbar[2], gt[12], gt[11], gt[10];
+    all_gt_vels.push_back(-body_rate);
+  }
+}
+
 int main(int argc, char **argv) {
   // disable eigen multi-threading
   Eigen::setNbThreads(1);
@@ -517,6 +546,19 @@ int main(int argc, char **argv) {
   const auto start_frame = node->declare_parameter<int>("boreas.odometry.start_frame", 0);
   const auto end_frame = node->declare_parameter<int>("boreas.odometry.end_frame", -1);
 
+  // Load in groundtruth data
+  const auto load_gt = node->declare_parameter<bool>("boreas.load_gt", true);
+  CLOG(WARNING, "boreas_wrapper") << "Load groundtruth: " << load_gt;
+  std::vector<lgmath::se3::Transformation> T_lid_world_gt;
+  std::vector<Eigen::Vector<double, 6>> v_lid_gt;
+  // Reserve space
+  T_lid_world_gt.reserve(files.size());
+  v_lid_gt.reserve(files.size());
+  if (load_gt) {
+    load_groundtruth(loc_dir, T_lid_world_gt, v_lid_gt);
+    CLOG(WARNING, "boreas_wrapper") << "Loaded groundtruth for " << T_lid_world_gt.size() << " frames";
+  }
+
   // thread handling variables
   TestControl test_control(node);
 
@@ -638,6 +680,12 @@ int main(int argc, char **argv) {
       query_data->T_s_r_wheel.emplace(T_wheel_robot);
       query_data->wheel_meas.emplace(wheel_meas);
     }
+
+    // Set groundtruth if loaded
+    if (load_gt && frame < T_lid_world_gt.size()) {
+      query_data->T_s_world_gt.emplace(T_lid_world_gt[frame]);
+      query_data->v_s_gt.emplace(v_lid_gt[frame]);
+    }    
 
     // execute the pipeline
     tactic->input(query_data);

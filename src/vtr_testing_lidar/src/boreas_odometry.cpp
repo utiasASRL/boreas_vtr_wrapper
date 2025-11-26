@@ -475,14 +475,14 @@ int main(int argc, char **argv) {
   // Load in groundtruth data
   const auto load_gt = node->declare_parameter<bool>("boreas.load_gt", true);
   CLOG(WARNING, "boreas_wrapper") << "Load groundtruth: " << load_gt;
-  std::vector<lgmath::se3::Transformation> T_rad_world_gt;
-  std::vector<Eigen::Vector<double, 6>> v_rad_gt;
+  std::vector<lgmath::se3::Transformation> T_lid_world_gt;
+  std::vector<Eigen::Vector<double, 6>> v_lid_gt;
   // Reserve space
-  T_rad_world_gt.reserve(files.size());
-  v_rad_gt.reserve(files.size());
+  T_lid_world_gt.reserve(files.size());
+  v_lid_gt.reserve(files.size());
   if (load_gt) {
-    load_groundtruth(odo_dir, T_rad_world_gt, v_rad_gt);
-    CLOG(WARNING, "boreas_wrapper") << "Loaded groundtruth for " << T_rad_world_gt.size() << " frames";
+    load_groundtruth(odo_dir, T_lid_world_gt, v_lid_gt);
+    CLOG(WARNING, "boreas_wrapper") << "Loaded groundtruth for " << T_lid_world_gt.size() << " frames";
   }
 
   // thread handling variables
@@ -608,9 +608,9 @@ int main(int argc, char **argv) {
     }
 
     // Set groundtruth if loaded
-    if (load_gt && frame < T_rad_world_gt.size()) {
-      query_data->T_s_world_gt.emplace(T_rad_world_gt[frame]);
-      query_data->v_s_gt.emplace(v_rad_gt[frame]);
+    if (load_gt && frame < T_lid_world_gt.size()) {
+      query_data->T_s_world_gt.emplace(T_lid_world_gt[frame]);
+      query_data->v_s_gt.emplace(v_lid_gt[frame]);
     }
 
     // execute the pipeline
