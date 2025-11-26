@@ -495,18 +495,12 @@ int main(int argc, char **argv) {
       int64_t end_timestamp;
       load_radar_time_span(scan, start_timestamp, end_timestamp);
 
-      CLOG(WARNING, "boreas_wrapper") << "IMU timestamp: " << timestamp_imu;
-      CLOG(WARNING, "boreas_wrapper") << "Radar start timestamp: " << start_timestamp;
-      CLOG(WARNING, "boreas_wrapper") << "Radar end timestamp: " << end_timestamp;
-
       if (imu_counter == 0) {
         // Find IMU measurement right before radar frame to initialize
         while (all_imu_meas[imu_counter].timestamp_ns < start_timestamp) {
           ++imu_counter;
         }
       }
-
-      CLOG(WARNING, "boreas_wrapper") << "IMU counter: " << imu_counter;
 
       // Loop through all IMU measurements from previous one to end of current radar frame
       // This captures IMU measurements that are between frames
@@ -520,7 +514,6 @@ int main(int argc, char **argv) {
         gyro_msgs.push_back(gyro_msg);
         ++imu_counter;
       }
-      CLOG(WARNING, "boreas_wrapper") << "Loaded " << gyro_msgs.size() << " IMU measurements";
     }
 
     // Feed in wheel encoder data if available/desired
