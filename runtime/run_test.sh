@@ -14,8 +14,8 @@ if [ "$MODE" != "odometry" ] && [ "$MODE" != "localization" ]; then
     echo "Error: MODE must be either 'odometry' or 'localization'"
     exit 1
 fi
-if [ "$SENSOR" != "radar" ] && [ "$SENSOR" != "lidar" ] && [ "$SENSOR" != "radar_lidar" ]; then
-    echo "Error: SENSOR must be either 'radar', 'lidar', or 'radar_lidar'"
+if [ "$SENSOR" != "radar" ] && [ "$SENSOR" != "lidar" ] && [ "$SENSOR" != "radar_lidar" ] && [ "$SENSOR" != "aeva" ]; then
+    echo "Error: SENSOR must be either 'radar', 'lidar', 'radar_lidar', or 'aeva'"
     exit 1
 fi
 if [ -z "$ODO_INPUT" ]; then

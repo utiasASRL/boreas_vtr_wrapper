@@ -27,16 +27,9 @@
       ]
     ############ boreas data configuration ############
     boreas:
-      aeriesII: true
-      root_path: "/home/katya/Documents/Data/sensor_config/boreas_aeries_ii"  # point this to where we find the trained sensor model
-      model_name: "glen"
       imu:
         use_imu: true
         imu_name: "aeva" # options are "dmu", "aeva", or "imu" (for applanix imu)
-        bias: [0.0, 0.0, 0.0] # gyro bias
-      wheel_encoder:
-        use_wheel_encoder: false
-        encoder_max: 16777216 # 2^24
       odometry:
         start_frame: 0  # start frame for odometry
         end_frame: -1   # -1 means process all frames
@@ -61,7 +54,7 @@
       save_odometry_result: true
       save_odometry_vel_result: true
       save_localization_result: true
-      visualize: true
+      visualize: false
 
       # localization interval threshold 
       loc_threshold: 1   # num frames, set to 1 to localize every frame
@@ -75,7 +68,7 @@
       preprocessing: [
           # preprocessing thread modules
           "conversion",
-          "filtering",
+          #"filtering",
           "doppler_filtering",
         ]
 
@@ -103,7 +96,7 @@
       conversion:
         type: lidar.aeva_converter
 
-        visualize: true
+        visualize: false
 
       filtering:
         type: lidar.preprocessing
@@ -130,24 +123,11 @@
         cluster_num_sample: 5000 # max number of sample after removing isolated points
         min_points_threshold: 0 # min number of points to be considered as valid scan, set to 0 to disable
 
-        visualize: true
+        visualize: false
 
       doppler_filtering:
         type: lidar.preprocessing_doppler
         num_threads: 1
-
-        # # aeriesI
-        # azimuth_res: 0.00349066         # vertical angle resolution in radians
-        # azimuth_start: -0.872665        # -50 deg in rad
-        # azimuth_end: 0.872665
-        # num_rows: 80                    # num of vertical scan lines  
-        # num_cols: 501                   # 100 deg FOV, 0.2 deg resolution
-        # min_dist: 20.0                  # meters
-        # max_dist: 150.0                 # meters
-        # const_gyro_bias: [-0.00424229788086775, -0.01544970808768110, 0.00284478234035327]
-        # root_path: "/home/katya/Documents/data/sensor_config/boreas_aeries_i"   # point this to where we find the trained sensor model
-        # model_name: "glen"
-
         # aeriesII
         azimuth_res: 0.00349066         # vertical angle resolution in radians
         azimuth_start: -0.994838        # -57 deg in rad         
@@ -156,20 +136,14 @@
         num_cols: 601                   # 120 deg FOV, 0.2 deg resolution
         min_dist: 5.0                  # meters
         max_dist: 100.0                 # meters
-        root_path: "/home/katya/Documents/Data/sensor_config/boreas_aeries_ii"  # point this to where we find the trained sensor model
-        model_name: "glen"
-
-        # common to I and II
-        active_lidars: [true]                                                 # only one sensor
-        active_gyros: [true]  
+        root_path: "/home/katya/Documents/Data/sensor_config/boreas_aeries_ii/hwy7"
         downsample_steps: 2                                                   # after image projection 
         bias_input_feat: ["range", "intensity", "medianrv"]
         var_input_feat: ["intensity", "medianrv", "rv_var5"]
         bias_polyorder: 3
         var_polyorder: 2
-        median_sensorid: 0                                                    # only one sensor
 
-        visualize: true
+        visualize: false
 
     odometry:
       icp:
@@ -178,10 +152,7 @@
         # continuous time estimation
         use_trajectory_estimation: true
         traj_num_extra_states: 0
-        # traj_qc_diag: [1.0, 0.1, 0.1, 0.1, 0.1, 1.0] # og
-        # traj_qc_diag: [4.0, 4.0, 0.5, 0.1, 0.1, 1.0] # good: 0.3 2D, 0.48 3d
-        traj_qc_diag: [4.0, 2.0, 0.01, 0.01, 0.01, 0.5] # good: 0.3 2D, 0.48 3d
-        # traj_qc_diag: [4.0, 8.0, 0.5, 0.1, 0.1, 1.0]
+        traj_qc_diag: [4.0, 4.0, 0.5, 0.1, 0.1, 1.0] # good: 0.3 2D, 0.48 3d \\ Terr(2D) 0.30%  Rerr(2D) 0.0008deg/m  Terr(3D) 0.47% Rerr(2D) 0.0015deg/m \\
 
         # ICP parameters
         num_threads: 10
@@ -205,15 +176,12 @@
         max_trans_diff: 1000.0
         max_trans_vel_diff: 1000.0
 
-        visualize: true
+        visualize: false
 
       doppler:
         type: lidar.odometry_doppler
         #
         num_threads: 1
-        # estimate_gyro_bias: false
-        # bias_vel_threshold: 0.2
-        #
         traj_qc_diag: [1.0, 0.001, 0.001, 0.001, 0.001, 1.0]
         # doppler odom parameters
         ransac_seed: 0
@@ -224,14 +192,13 @@
         ransac_min_range: 8.0       # m
         integration_steps: 100
         zero_vel_tol: 0.03
-        gyro_invcov: [18264.083766029, 11516.771471207, 39904.083910244]
+        gyro_cov: [0.00005475, 0.00008683, 0.00002507] #// good
         #
         P0inv: [1e4, 1e4, 1e4, 1e6, 1e6, 1e6]
         Qkinv: [124.097194, 852.430330017, 448.704299478, 1128.19639192, 1230.02908934, 11316.9459369]
         Qzinv: [0.0, 100.0, 100.0, 33271.2755284, 20032.1558168, 0.0]
         #
         max_trans_vel_diff: 1.0     # m/s
-
 
       mapping:
         type: lidar.odometry_map_maintenance_v2
@@ -243,7 +210,7 @@
 
         point_life_time: 10.0
 
-        visualize: true
+        visualize: false
 
       vertex_test:
         type: lidar.vertex_test
@@ -262,7 +229,7 @@
 
         map_version: "pointmap"
 
-        visualize: true
+        visualize: false
 
       icp:
         type: lidar.localization_icp
