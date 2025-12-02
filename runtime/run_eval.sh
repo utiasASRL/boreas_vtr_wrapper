@@ -5,7 +5,7 @@
 
 # Get arguments
 MODE=$1         # [odometry, localization]
-SENSOR=$2       # [radar, lidar, radar_lidar]
+SENSOR=$2       # [radar, lidar, radar_lidar, aeva]
 ODO_INPUT=$3    # Boreas sequence
 
 # Set results subfolder, VTRRESULT is set in setup_container.sh
