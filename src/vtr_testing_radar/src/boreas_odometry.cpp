@@ -174,9 +174,9 @@ void load_all_imu_meas(const fs::path &imu_meas_file, std::vector<IMUMeasurement
     } else if (imu_file_name == "dmu_imu.csv") {
       // [angvel_z, angvel_y, angvel_x, ..., ..., ..., ..., angvel_x, angvel_y, angvel_z]
       meas.timestamp_ns = static_cast<int64_t>(timestamp_ns);
-      meas.angvel_x = imu[6];
-      meas.angvel_y = imu[7];
-      meas.angvel_z = imu[8];
+      meas.angvel_x = imu[0];
+      meas.angvel_y = imu[1];
+      meas.angvel_z = imu[2];
     } else if (imu_file_name == "aeva_imu.csv") {
       // [angvel_x, angvel_y, angvel_z, ..., ..., ..., ..., angvel_x, angvel_y, angvel_z]
       meas.timestamp_ns = static_cast<int64_t>(timestamp_ns);
