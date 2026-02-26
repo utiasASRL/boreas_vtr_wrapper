@@ -50,12 +50,13 @@ class BagFileParser():
     return [(timestamp, deserialize_message(data, self.topic_msg_message[topic_name])) for timestamp, data in rows]
 
 
-def main(dataset_dir, result_dir, velocity):
+def main(dataset_dir, result_dir, velocity, quiet=False):
   result_dir = osp.normpath(result_dir)
   odo_input = osp.basename(result_dir)
-  print("Result Directory:", result_dir)
-  print("Odometry Run:", odo_input)
-  print("Dataset Directory:", dataset_dir)
+  if not quiet:
+    print("Result Directory:", result_dir)
+    print("Odometry Run:", odo_input)
+    print("Dataset Directory:", dataset_dir)
 
   try:
     # Removes parameter related components from the odometry input
@@ -72,7 +73,7 @@ def main(dataset_dir, result_dir, velocity):
   data_dir = osp.join(odo_dir, "graph/data")
   if not osp.exists(data_dir):
     return
-  print("Looking at result data directory:", data_dir)
+  if not quiet: print("Looking at result data directory:", data_dir)
 
   # Using radar frame as robot frame for SE(2) radar odometry
   # This was approved by Tim in October 2025
@@ -102,14 +103,14 @@ def main(dataset_dir, result_dir, velocity):
   with open(osp.join(output_dir, odo_input + ".txt"), "+w") as file:
     writer = csv.writer(file, delimiter=' ')
     writer.writerows(result)
-    print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
+    if not quiet: print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
 
   output_dir = osp.join(result_dir, "../odometry_result")
   os.makedirs(output_dir, exist_ok=True)
   with open(osp.join(output_dir, odo_input + ".txt"), "+w") as file:
     writer = csv.writer(file, delimiter=' ')
     writer.writerows(result)
-    print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
+    if not quiet: print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
 
   if velocity:
     bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "odometry_vel_result")
@@ -138,14 +139,14 @@ def main(dataset_dir, result_dir, velocity):
     with open(osp.join(output_dir, odo_input + ".txt"), "+w") as file:
       writer = csv.writer(file, delimiter=' ')
       writer.writerows(vel_results)
-      print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
+      if not quiet: print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
 
     output_dir = osp.join(result_dir, "../odometry_vel_result")
     os.makedirs(output_dir, exist_ok=True)
     with open(osp.join(output_dir, odo_input + ".txt"), "+w") as file:
       writer = csv.writer(file, delimiter=' ')
       writer.writerows(vel_results)
-      print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
+      if not quiet: print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
 
 
 if __name__ == "__main__":
@@ -158,7 +159,8 @@ if __name__ == "__main__":
   parser.add_argument('--dataset', default=os.getcwd(), type=str, help='path to boreas dataset (contains boreas-*)')
   parser.add_argument('--path', default=os.getcwd(), type=str, help='path to vtr folder (default: os.getcwd())')
   parser.add_argument('--velocity', default=False, action='store_true', help='evaluate velocity (default: False)')
+  parser.add_argument('--quiet', action='store_true', help='suppress verbose output (default: False)')
 
   args = parser.parse_args()
 
-  main(args.dataset, args.path, args.velocity)
+  main(args.dataset, args.path, args.velocity, args.quiet)
