@@ -51,15 +51,16 @@ class BagFileParser():
     return [(timestamp, deserialize_message(data, self.topic_msg_message[topic_name])) for timestamp, data in rows]
 
 
-def main(dataset_dir, result_dir):
+def main(dataset_dir, result_dir, quiet=False):
   result_dir = osp.normpath(result_dir)
   odo_input = osp.basename(result_dir)
   loc_inputs = [i for i in os.listdir(result_dir) if (i != odo_input and i.startswith("boreas"))]
   loc_inputs.sort()
-  print("Result Directory:", result_dir)
-  print("Odometry Run:", odo_input)
-  print("Localization Runs:", loc_inputs)
-  print("Dataset Directory:", dataset_dir)
+  if not quiet:
+    print("Result Directory:", result_dir)
+    print("Odometry Run:", odo_input)
+    print("Localization Runs:", loc_inputs)
+    print("Dataset Directory:", dataset_dir)
 
   # dataset directory and necessary sequences to load
   dataset_odo = BoreasDataset(osp.normpath(dataset_dir), [[odo_input]])
@@ -75,7 +76,7 @@ def main(dataset_dir, result_dir):
     precision = 1e7  # divide by this number to ensure always find the timestamp
     ground_truth_poses_odo.update(
         {int(int(frame.timestamp * 1e9) / precision): frame.pose for frame in sequence.radar_frames})
-  print("Loaded number of odometry poses: ", len(ground_truth_poses_odo))
+  if not quiet: print("Loaded number of odometry poses: ", len(ground_truth_poses_odo))
 
   for i, loc_input in enumerate(loc_inputs):
 
@@ -92,14 +93,14 @@ def main(dataset_dir, result_dir):
       ground_truth_poses_loc.update(
           {int(int(frame.timestamp * 1e9) / precision): frame.pose for frame in sequence.radar_frames})
 
-    print("Loaded number of localization poses: ", len(ground_truth_poses_loc))
+    if not quiet: print("Loaded number of localization poses: ", len(ground_truth_poses_loc))
 
     loc_dir = osp.join(result_dir, loc_input)
 
     data_dir = osp.join(loc_dir, "graph/data")
     if not osp.exists(data_dir):
       continue
-    print("Looking at result data directory:", data_dir)
+    if not quiet: print("Looking at result data directory:", data_dir)
 
     # get bag file
     bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "localization_result")
@@ -137,14 +138,14 @@ def main(dataset_dir, result_dir):
       # compute error
       errors[i, :] = se3op.tran2vec(T_map_test_in_radar @ T_test_map_in_radar_gt).flatten()
 
-    print(np.mean(np.abs(errors), axis=0))
+    if not quiet: print(np.mean(np.abs(errors), axis=0))
 
     output_dir = osp.join(result_dir, "localization_result")
     os.makedirs(output_dir, exist_ok=True)
     with open(osp.join(output_dir, loc_input + ".txt"), "+w") as file:
       writer = csv.writer(file, delimiter=' ')
       writer.writerows(result)
-      print("Written to file:", osp.join(output_dir, loc_input + ".txt"))
+      if not quiet: print("Written to file:", osp.join(output_dir, loc_input + ".txt"))
 
 
 if __name__ == "__main__":
@@ -156,7 +157,8 @@ if __name__ == "__main__":
   # <rosbag name>/<rosbag name>_0.db3
   parser.add_argument('--dataset', default=os.getcwd(), type=str, help='path to boreas dataset (contains boreas-*)')
   parser.add_argument('--path', default=os.getcwd(), type=str, help='path to vtr folder (default: os.getcwd())')
+  parser.add_argument('--quiet', action='store_true', help='suppress verbose output (default: False)')
 
   args = parser.parse_args()
 
-  main(args.dataset, args.path)
+  main(args.dataset, args.path, args.quiet)
