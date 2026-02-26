@@ -694,7 +694,7 @@ int main(int argc, char **argv) {
     if (gyro_msgs.size() > 0) {
       query_data->T_s_r_gyro.emplace(T_imu_robot);
       query_data->gyro_msgs.emplace(gyro_msgs);
-      query_data->gyro_bias.emplace(gyro_bias);
+      // query_data->gyro_bias.emplace(gyro_bias);
     }
 
     // set wheel encoder messages
