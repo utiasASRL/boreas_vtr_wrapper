@@ -68,17 +68,23 @@ def main(dataset_dir, result_dir):
   ground_truth_poses_odo = dict()
   for sequence in dataset_odo.sequences:
     # Ground truth is provided w.r.t sensor, so we set sensor to vehicle
-    # transform to identity
-    yfwd2xfwd = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+    T_applanix_wheel_file = os.path.join(dataset_dir, odo_input, "calib/T_applanix_wheel.txt")
+    if not os.path.exists(T_applanix_wheel_file):
+      print("File does not exist:", T_applanix_wheel_file)
+      return
+    T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
+    T_wheel_applanix = get_inverse_tf(T_applanix_wheel)
+    T_wheelfwd_wheel = np.array([[0, -1, 0, 0],
+                                [1, 0, 0, 0],
+                                [0, 0, 1, 0],
+                                [0, 0, 0, 1]])
+    T_z_down = np.array([[1, 0, 0, 0],
+                        [0, -1, 0, 0],
+                        [0, 0, -1, 0],
+                        [0, 0, 0, 1]])
 
-    T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
-                              [-0.99955003, 0.0299955, 0., 0.0],
-                              [ 0, 0, 1, 1.45],
-                              [ 0, 0, 0, 1]])
-
-    T_robot_lidar_odo = T_axel_applanix @ sequence.calib.T_applanix_lidar
-    # T_robot_lidar_odo = sequence.calib.T_applanix_lidar
-    T_lidar_robot_odo = get_inverse_tf(T_robot_lidar_odo)
+    T_robot_applanix = T_z_down @ T_wheelfwd_wheel @ T_wheel_applanix
+    T_robot_lidar_odo = T_robot_applanix @ sequence.calib.T_applanix_lidar
 
     # build dictionary
     precision = 1e7  # divide by this number to ensure always find the timestamp
@@ -94,18 +100,7 @@ def main(dataset_dir, result_dir):
     # generate ground truth pose dictionary
     ground_truth_poses_loc = dict()
     for sequence in dataset_loc.sequences:
-      # Ground truth is provided w.r.t sensor, so we set sensor to vehicle
-      # transform to identity
-      yfwd2xfwd = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-
-      T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
-                                [-0.99955003, 0.0299955, 0., 0.0],
-                                [ 0, 0, 1, 1.45],
-                                [ 0, 0, 0, 1]])
-
-      T_robot_radar_loc = T_axel_applanix @ sequence.calib.T_applanix_lidar @ get_inverse_tf(sequence.calib.T_radar_lidar)
-      # T_robot_radar_loc = sequence.calib.T_applanix_radar
-      T_radar_robot_loc = get_inverse_tf(T_robot_radar_loc)
+      T_radar_robot_loc = T_radar_robot_loc = np.eye(4)
 
       # build dictionary
       precision = 1e7  # divide by this number to ensure always find the timestamp

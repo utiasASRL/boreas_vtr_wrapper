@@ -30,64 +30,63 @@ int64_t getStampFromPath(const std::string &path) {
   return time1 * 1000;
 }
 
+Eigen::Matrix4d load_T_wheel_applanix(const fs::path &path, bool aligned = false) {
+  std::ifstream ifs(path / "calib" / "T_applanix_wheel.txt", std::ios::in);
+  if (!ifs.is_open()) {
+    CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_wheel.txt";
+    throw std::invalid_argument("File not found: " + (path / "calib" / "T_applanix_wheel.txt").string());
+  }
+  Eigen::Matrix4d T_applanix_wheel_mat;
+  for (size_t row = 0; row < 4; row++)
+    for (size_t col = 0; col < 4; col++) ifs >> T_applanix_wheel_mat(row, col);
+  
+
+  // This transform has y forward, x right, z up
+  Eigen::Matrix4d T_wheel_applanix = T_applanix_wheel_mat.inverse();
+
+  if (aligned) {
+    // Rotate it so that x is forward to make it more intuitive
+    Eigen::Matrix4d T_wheelfwd_wheel = Eigen::Matrix4d::Identity();
+    T_wheelfwd_wheel.block<3, 3>(0, 0) << 0, -1, 0,
+                                      1, 0, 0,
+                                      0, 0, 1;
+
+    // Now rotate it so that z is down (there is a numerical issue in lgmath if we don't do this and I don't have time to debug it right now)
+    Eigen::Matrix4d T_zdown = Eigen::Matrix4d::Identity();
+    T_zdown.block<3, 3>(0, 0) << 1, 0, 0,
+                                0, -1, 0,
+                                0, 0, -1;
+
+    T_wheel_applanix = T_zdown * T_wheelfwd_wheel * T_wheel_applanix;
+  }
+
+  return T_wheel_applanix;
+}
+
 EdgeTransform load_T_robot_lidar(const fs::path &path) {
   std::ifstream ifs(path / "calib" / "T_applanix_lidar.txt", std::ios::in);
-
+  if (!ifs.is_open()) {
+    CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_lidar.txt";
+    throw std::invalid_argument("File not found: " + (path / "calib" / "T_applanix_lidar.txt").string());
+  }
   Eigen::Matrix4d T_applanix_lidar_mat;
   for (size_t row = 0; row < 4; row++)
     for (size_t col = 0; col < 4; col++) ifs >> T_applanix_lidar_mat(row, col);
 
-  // Eigen::Matrix4d yfwd2xfwd;
-  // yfwd2xfwd << 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1;
+  // Extrinsic from lidar to rear wheel
+  // This transform has x forward, y left, z up
+  Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path, true);
 
-  // Extrinsic from radar to rear axel
-  Eigen::Matrix4d T_axel_applanix;
-  // Want to estimate at rear axel, this transform has x forward, y right, z down
-  T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
-                    -0.99955003, 0.0299955, 0, 0.0,
-                    0, 0, 1, 1.45,
-                    0, 0, 0, 1;
-
-  EdgeTransform T_robot_lidar(Eigen::Matrix4d(T_axel_applanix * T_applanix_lidar_mat),
+  EdgeTransform T_robot_lidar(Eigen::Matrix4d(T_wheel_applanix * T_applanix_lidar_mat),
                               Eigen::Matrix<double, 6, 6>::Zero());
 
   return T_robot_lidar;
 }
 
 EdgeTransform load_T_robot_radar(const fs::path &path) {
-#if true
-  std::ifstream ifs1(path / "calib" / "T_applanix_lidar.txt", std::ios::in);
-  std::ifstream ifs2(path / "calib" / "T_radar_lidar.txt", std::ios::in);
-
-  Eigen::Matrix4d T_applanix_lidar_mat;
-  for (size_t row = 0; row < 4; row++)
-    for (size_t col = 0; col < 4; col++) ifs1 >> T_applanix_lidar_mat(row, col);
-
-  Eigen::Matrix4d T_radar_lidar_mat;
-  for (size_t row = 0; row < 4; row++)
-    for (size_t col = 0; col < 4; col++) ifs2 >> T_radar_lidar_mat(row, col);
-
-  // Eigen::Matrix4d yfwd2xfwd;
-  // yfwd2xfwd << 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1;
-
-  // Extrinsic from radar to rear axel
-  Eigen::Matrix4d T_axel_applanix;
-  // Want to estimate at rear axel, this transform has x forward, y right, z down
-  T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
-                    -0.99955003, 0.0299955, 0, 0.0,
-                    0, 0, 1, 1.45,
-                    0, 0, 0, 1;
-
-
-  EdgeTransform T_robot_radar(Eigen::Matrix4d(T_axel_applanix * T_applanix_lidar_mat *
-                                              T_radar_lidar_mat.inverse()),
-                              Eigen::Matrix<double, 6, 6>::Zero());
-#else
-  (void)path;
-  // robot frame == radar frame
-  EdgeTransform T_robot_radar(Eigen::Matrix4d(Eigen::Matrix4d::Identity()),
-                              Eigen::Matrix<double, 6, 6>::Zero());
-#endif
+  Eigen::Matrix4d identity_matrix = Eigen::Matrix4d::Identity();
+  Eigen::Matrix<double, 6, 6> zero_cov = Eigen::Matrix<double, 6, 6>::Zero();
+  EdgeTransform T_robot_radar(identity_matrix, zero_cov);
 
   return T_robot_radar;
 }
