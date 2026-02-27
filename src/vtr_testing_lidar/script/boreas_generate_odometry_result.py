@@ -73,12 +73,24 @@ def main(dataset_dir, result_dir, velocity):
     return
   print("Looking at result data directory:", data_dir)
   
-  T_applanix_axel_file = os.path.join(dataset_dir, odo_input_seq, "calib/T_applanix_axel.txt")
-  if not os.path.exists(T_applanix_axel_file):
-    print("File does not exist:", T_applanix_axel_file)
+  T_applanix_wheel_file = os.path.join(dataset_dir, odo_input_seq, "calib/T_applanix_wheel.txt")
+  if not os.path.exists(T_applanix_wheel_file):
+    print("File does not exist:", T_applanix_wheel_file)
     return
-  T_applanix_axel = np.loadtxt(T_applanix_axel_file)
-  T_robot_applanix = get_inverse_tf(T_applanix_axel)
+  T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
+  T_wheel_applanix = get_inverse_tf(T_applanix_wheel)
+
+  T_wheelfwd_wheel = np.array([[0, -1, 0, 0],
+                              [1, 0, 0, 0],
+                              [0, 0, 1, 0],
+                              [0, 0, 0, 1]])
+
+  T_z_down = np.array([[1, 0, 0, 0],
+                       [0, -1, 0, 0],
+                       [0, 0, -1, 0],
+                       [0, 0, 0, 1]])
+
+  T_robot_applanix = T_z_down @ T_wheelfwd_wheel @ T_wheel_applanix
   
   # get bag file
   bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "odometry_result")
