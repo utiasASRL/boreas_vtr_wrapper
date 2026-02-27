@@ -91,7 +91,7 @@ std::pair<int64_t, Eigen::MatrixXd> load_lidar(const std::string &path) {
   return std::make_pair(timestamp, std::move(pc));
 }
 
-Eigen::Matrix4d load_T_wheel_applanix(const fs::path &path) {
+Eigen::Matrix4d load_T_wheel_applanix(const fs::path &path, bool aligned = false) {
   std::ifstream ifs(path / "calib" / "T_applanix_wheel.txt", std::ios::in);
   if (!ifs.is_open()) {
     CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_wheel.txt";
@@ -105,21 +105,23 @@ Eigen::Matrix4d load_T_wheel_applanix(const fs::path &path) {
   // This transform has y forward, x right, z up
   Eigen::Matrix4d T_wheel_applanix = T_applanix_wheel_mat.inverse();
 
-  // Rotate it so that x is forward to make it more intuitive
-  Eigen::Matrix4d T_wheelfwd_wheel = Eigen::Matrix4d::Identity();
-  T_wheelfwd_wheel.block<3, 3>(0, 0) << 0, -1, 0,
-                                    1, 0, 0,
-                                    0, 0, 1;
+  if (aligned) {
+    // Rotate it so that x is forward to make it more intuitive
+    Eigen::Matrix4d T_wheelfwd_wheel = Eigen::Matrix4d::Identity();
+    T_wheelfwd_wheel.block<3, 3>(0, 0) << 0, -1, 0,
+                                      1, 0, 0,
+                                      0, 0, 1;
 
-  // Now rotate it so that z is down (there is a numerical issue in lgmath if we don't do this and I don't have time to debug it right now)
-  Eigen::Matrix4d T_zdown = Eigen::Matrix4d::Identity();
-  T_zdown.block<3, 3>(0, 0) << 1, 0, 0,
-                              0, -1, 0,
-                              0, 0, -1;
+    // Now rotate it so that z is down (there is a numerical issue in lgmath if we don't do this and I don't have time to debug it right now)
+    Eigen::Matrix4d T_zdown = Eigen::Matrix4d::Identity();
+    T_zdown.block<3, 3>(0, 0) << 1, 0, 0,
+                                0, -1, 0,
+                                0, 0, -1;
 
-  Eigen::Matrix4d T_wheelfwd_applanix = T_zdown * T_wheelfwd_wheel * T_wheel_applanix;
+    T_wheel_applanix = T_zdown * T_wheelfwd_wheel * T_wheel_applanix;
+  }
 
-  return T_wheelfwd_applanix;
+  return T_wheel_applanix;
 }
 
 EdgeTransform load_T_robot_lidar(const fs::path &path) {
@@ -134,7 +136,7 @@ EdgeTransform load_T_robot_lidar(const fs::path &path) {
 
   // Extrinsic from lidar to rear wheel
   // This transform has x forward, y left, z up
-  Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path);
+  Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path, true);
 
   EdgeTransform T_robot_lidar(Eigen::Matrix4d(T_wheel_applanix * T_applanix_lidar_mat),
                               Eigen::Matrix<double, 6, 6>::Zero());
@@ -145,7 +147,7 @@ EdgeTransform load_T_robot_lidar(const fs::path &path) {
 EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name) {
   // Extrinsic from applanix to rear wheel
   // This transform has x forward, y left, z up
-  Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path);
+  Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path, true);
 
   EdgeTransform T_robot_imu;
   if (imu_name == "dmu") {
@@ -245,11 +247,10 @@ void load_all_imu_meas(const fs::path &imu_meas_file, std::vector<IMUMeasurement
 }
 
 EdgeTransform load_T_wheel_robot(const fs::path &path) {
-  // Robot frame is at rear wheel, so extrinsic from wheel to robot is identity
-  Eigen::Matrix4d T_wheel_robot_mat = Eigen::Matrix4d::Identity();
-  EdgeTransform T_wheel_robot(T_wheel_robot_mat,
-                              Eigen::Matrix<double, 6, 6>::Zero());
-  
+  Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path, false);
+  Eigen::Matrix4d T_robot_applanix = load_T_wheel_applanix(path, true);
+  EdgeTransform T_wheel_robot(Eigen::Matrix4d(T_wheel_applanix * T_robot_applanix.inverse()),
+                               Eigen::Matrix<double, 6, 6>::Zero());
   return T_wheel_robot;
 }
 
