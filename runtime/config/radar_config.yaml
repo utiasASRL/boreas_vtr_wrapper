@@ -15,21 +15,23 @@
         # pipeline specific
         "radar.pipeline",
         # "radar.pc_extractor",
-        "radar.doppler_extractor",
+        # "radar.doppler_extractor",
         # "radar.conversion",
         # "radar.preprocessing",
         # "radar.mcransac",
         # "radar.odometry_icp",
-        # "radar.odometry_se3_icp",
+        # "radar.odometry_gt",
         # "radar.odometry_wheel",
         # "radar.vertex_test",
         # "radar.localization_map_recall",
         # "radar.localization_icp",
+        # "pose_graph",
       ]
 
     ############ Boreas data configuration ############
     boreas:
       radar_dir_name: "radar" # [radar, doppler_radar, range_corr_radar, az_doppler_radar]
+      load_gt: false
       imu:
         use_imu: true
         imu_name: "dmu" # options are "dmu", "aeva", or "imu" (for applanix imu)
@@ -54,8 +56,8 @@
 
       chain:
         min_cusp_distance: 1.5
-        angle_weight: 0.0 #set to 0 to prevent warnings when driving in reverse, used to be 7
-        search_depth: 5
+        angle_weight: 7.0
+        search_depth: 10
         search_back_depth: 10
         distance_warning: 30.0
 
@@ -82,7 +84,7 @@
           # odometry and mapping thread modules
           # "mcransac",
           "icp",
-          # "se3_icp",
+          # "gt",
           # "wheel",
           "mapping",
           "vertex_test",
@@ -111,10 +113,11 @@
         cartesian_maxr: 80.0 # maximum cartesian visualization distance
       extraction:
         type: radar.pc_extractor
-        radar_resolution: 0.0438  
+        radar_resolution: 0.0438
+        # radar_resolution: 0.0596
         range_offset: -0.31
         detector: kstrongest # choose detector \in (kstrongest, cen2018, cacfar, oscfar, modified_cacfar)
-        minr: 2.0 # mininum detection distance
+        minr: 4.0 # mininum detection distance
         maxr: 80.0 # maximum detection distance, old is 80
         # TODO: make cart_resolution an integer mult of radar_resolution
         cart_resolution: 0.2384 # m/pixel of BEV Cartesian radar image
@@ -123,8 +126,15 @@
                                     # this sets beta to 0 internally
         kstrongest:
           kstrong: 3 # k-strongest per azimuth to retain
-          static_threshold: 0.35 # Try 0.25 for older Navtech firmware
+          static_threshold: 0.3 # Try 0.25 for older Navtech firmware
         bfar:
+          width: 101
+          guard: 5
+          # threshold: 15.0
+          # static_threshold: 0.15
+          threshold: 12.5
+          static_threshold: 0.3
+        modified_cacfar:
           width: 101
           guard: 5
           threshold: 12.5
@@ -135,7 +145,7 @@
       doppler_extraction:
         type: radar.doppler_extractor
         radar:
-          radar_resolution: 0.04381 # m/pixel, radar resolution
+          radar_res: 0.04381 # m/pixel, radar resolution
           f_t: 76.04E9    # Hz, start frequency ramp
           meas_freq: 1600.0 # Hz, number of measurements per second
           del_f: 893.0E6  # Hz, frequency span during ramp
@@ -198,50 +208,10 @@
         filter_pc: false
         init_icp: false
 
-      se3_icp:
-        type: radar.odometry_se3_icp
-
-        # continuous time estimation
-        traj_num_extra_states: 0
-        traj_qc_diag: [1.0, 0.001, 0.0001, 0.001, 0.001, 0.001]
-
-        # ICP parameters
+      gt:
+        type: radar.odometry_gt
         num_threads: 1
-        first_num_steps: 2 # number of steps to with a greater matching distance threshold
-        initial_max_iter: 4 # phase 1 max iterations
-        initial_max_pairing_dist: 5.0 # phase 1 max pairing distance in meters
-        initial_max_planar_dist: 5.0 # phase 1 max planar distance in meters
-        refined_max_iter: 25 # phase 2 max iterations
-        refined_max_pairing_dist: 5.0 # phase 2 max pairing distance in meters
-        refined_max_planar_dist: 5.0 # phase 2 max planar distance in meters
-        averaging_num_steps: 2 # averaging pose change over this number of steps until change is below a threshold at convergence
-        huber_delta: 1.0 # huber loss threshold for ICP
-        cauchy_k: 0.8 # cauchy loss threshold for ICP, should be 1.0 unless using both yaw and vel meas, 0.8 for N2
-        use_p2pl: false
-        w_icp_diag: [1.0, 1.0, 1.0]
-        normal_score_threshold: 0.0
-        remove_orientation: false
-
-        # Gyro stuff
-        gyro_cov: 1e-6
-        estimate_gyro_bias: false
-
-        # Doppler velocity parameters
-        use_vel_meas: false
-        use_radial_velocity: false
-        dopp_cauchy_k: 100.0
-        dopp_meas_std: 1e-6
-        vel_fwd_std: 0.0001  # 0.6 for N1, 0.4 for N2
-        vel_side_std: 0.0001 # 1.2 for N1, 1.0 for N2
-
-        # steam parameters
-        verbose: false
-        max_iterations: 1
-
-        # threshold
-        min_matched_ratio: 0.0
-
-        visualize: false
+        traj_qc_diag: [1.0, 0.001, 0.001]
 
       icp:
         type: radar.odometry_icp
@@ -256,7 +226,7 @@
         initial_max_iter: 4 # phase 1 max iterations
         initial_max_pairing_dist: 5.0 # phase 1 max pairing distance in meters
         initial_max_planar_dist: 5.0 # phase 1 max planar distance in meters
-        refined_max_iter: 25 # phase 2 max iterations
+        refined_max_iter: 15 # phase 2 max iterations
         refined_max_pairing_dist: 5.0 # phase 2 max pairing distance in meters
         refined_max_planar_dist: 5.0 # phase 2 max planar distance in meters
         averaging_num_steps: 2 # averaging pose change over this number of steps until change is below a threshold at convergence
@@ -273,10 +243,11 @@
 
         # Doppler velocity parameters
         use_vel_meas: false
-        dopp_cauchy_k: 2.0
+        dopp_cauchy_k: 1.0
         dopp_meas_std: 0.2
         vel_fwd_std: 0.6  # 0.6 for N1, 0.4 for N2
         vel_side_std: 1.2 # 1.2 for N1, 1.0 for N2
+        doppler_bias: [0.10, -0.11] # [x_bias, y_bias] in m/s
 
         # steam parameters
         verbose: false
@@ -344,12 +315,13 @@
         initial_max_iter: 4
         initial_max_pairing_dist: 5.0
         initial_max_planar_dist: 5.0
-        refined_max_iter: 25
+        refined_max_iter: 15
         refined_max_pairing_dist: 5.0
         refined_max_planar_dist: 5.0
         averaging_num_steps: 5
         huber_delta: 1.0
         cauchy_k: 1.0
+        w_icp_diag: [1.0, 1.0]
 
         # steam parameters
         verbose: false
