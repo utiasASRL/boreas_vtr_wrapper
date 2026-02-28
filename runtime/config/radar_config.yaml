@@ -75,7 +75,7 @@
           "conversion",
           "extraction",
           "filtering",
-          "doppler_extraction"
+          # "doppler_extraction"
         ]
 
       odometry: [
