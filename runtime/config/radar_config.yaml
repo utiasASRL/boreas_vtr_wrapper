@@ -3,28 +3,28 @@
     ############ system configuration ############
     # Data logging
     log_to_file: true
-    log_debug: true
+    log_debug: false
     log_enabled: [
         ## ADD LOGGER IDS HERE
         # tactic
-        "tactic",
+        # "tactic",
         # "tactic.pipeline",
-        "tactic.module",
+        # "tactic.module",
         # "tactic.module.live_mem_manager",
         # "tactic.module.graph_mem_manager",
         # pipeline specific
         "radar.pipeline",
-        "radar.pc_extractor",
+        # "radar.pc_extractor",
         "radar.doppler_extractor",
-        "radar.conversion",
-        "radar.preprocessing",
+        # "radar.conversion",
+        # "radar.preprocessing",
         # "radar.mcransac",
-        "radar.odometry_icp",
-        "radar.odometry_se3_icp",
+        # "radar.odometry_icp",
+        # "radar.odometry_se3_icp",
         # "radar.odometry_wheel",
         # "radar.vertex_test",
         # "radar.localization_map_recall",
-        "radar.localization_icp",
+        # "radar.localization_icp",
       ]
 
     ############ Boreas data configuration ############
@@ -135,7 +135,7 @@
       doppler_extraction:
         type: radar.doppler_extractor
         radar:
-          radar_res: 0.04381 # m/pixel, radar resolution
+          radar_resolution: 0.04381 # m/pixel, radar resolution
           f_t: 76.04E9    # Hz, start frequency ramp
           meas_freq: 1600.0 # Hz, number of measurements per second
           del_f: 893.0E6  # Hz, frequency span during ramp
@@ -344,7 +344,7 @@
         initial_max_iter: 4
         initial_max_pairing_dist: 5.0
         initial_max_planar_dist: 5.0
-        refined_max_iter: 100
+        refined_max_iter: 25
         refined_max_pairing_dist: 5.0
         refined_max_planar_dist: 5.0
         averaging_num_steps: 5
