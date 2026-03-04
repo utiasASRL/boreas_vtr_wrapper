@@ -47,17 +47,10 @@ Eigen::Matrix4d load_T_wheel_applanix(const fs::path &path, bool aligned = false
   if (aligned) {
     // Rotate it so that x is forward to make it more intuitive
     Eigen::Matrix4d T_wheelfwd_wheel = Eigen::Matrix4d::Identity();
-    T_wheelfwd_wheel.block<3, 3>(0, 0) << 0, -1, 0,
-                                      1, 0, 0,
+    T_wheelfwd_wheel.block<3, 3>(0, 0) << 0, 1, 0,
+                                      -1, 0, 0,
                                       0, 0, 1;
-
-    // Now rotate it so that z is down (there is a numerical issue in lgmath if we don't do this and I don't have time to debug it right now)
-    Eigen::Matrix4d T_zdown = Eigen::Matrix4d::Identity();
-    T_zdown.block<3, 3>(0, 0) << 1, 0, 0,
-                                0, -1, 0,
-                                0, 0, -1;
-
-    T_wheel_applanix = T_zdown * T_wheelfwd_wheel * T_wheel_applanix;
+    T_wheel_applanix = T_wheelfwd_wheel * T_wheel_applanix;
   }
 
   return T_wheel_applanix;
