@@ -80,17 +80,12 @@ def main(dataset_dir, result_dir, velocity):
   T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
   T_wheel_applanix = get_inverse_tf(T_applanix_wheel)
 
-  T_wheelfwd_wheel = np.array([[0, -1, 0, 0],
-                              [1, 0, 0, 0],
+  T_wheelfwd_wheel = np.array([[0, 1, 0, 0],
+                              [-1, 0, 0, 0],
                               [0, 0, 1, 0],
                               [0, 0, 0, 1]])
 
-  T_z_down = np.array([[1, 0, 0, 0],
-                       [0, -1, 0, 0],
-                       [0, 0, -1, 0],
-                       [0, 0, 0, 1]])
-
-  T_robot_applanix = T_z_down @ T_wheelfwd_wheel @ T_wheel_applanix
+  T_robot_applanix = T_wheelfwd_wheel @ T_wheel_applanix
   
   # get bag file
   bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "odometry_result")

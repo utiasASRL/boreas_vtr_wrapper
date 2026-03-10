@@ -74,16 +74,12 @@ def main(dataset_dir, result_dir):
       return
     T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
     T_wheel_applanix = get_inverse_tf(T_applanix_wheel)
-    T_wheelfwd_wheel = np.array([[0, -1, 0, 0],
-                                [1, 0, 0, 0],
+    T_wheelfwd_wheel = np.array([[0, 1, 0, 0],
+                                [-1, 0, 0, 0],
                                 [0, 0, 1, 0],
                                 [0, 0, 0, 1]])
-    T_z_down = np.array([[1, 0, 0, 0],
-                        [0, -1, 0, 0],
-                        [0, 0, -1, 0],
-                        [0, 0, 0, 1]])
 
-    T_robot_applanix = T_z_down @ T_wheelfwd_wheel @ T_wheel_applanix
+    T_robot_applanix = T_wheelfwd_wheel @ T_wheel_applanix
     T_robot_lidar_odo = T_robot_applanix @ sequence.calib.T_applanix_lidar
 
     # build dictionary
