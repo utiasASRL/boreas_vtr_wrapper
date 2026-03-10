@@ -16,8 +16,6 @@ find_package(vtr_testing_common REQUIRED)
 find_package(vtr_lidar REQUIRED)
 find_package(vtr_torch REQUIRED)
 
-## C++ Libraries
-
 ## Executables
 add_executable(${PROJECT_NAME}_boreas_preprocessing src/boreas_preprocessing.cpp)
 ament_target_dependencies(${PROJECT_NAME}_boreas_preprocessing rclcpp std_msgs vtr_testing_common vtr_lidar vtr_torch)
@@ -37,11 +35,6 @@ install(
   ARCHIVE DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
   INCLUDES DESTINATION include
-)
-
-install(
-  DIRECTORY config
-  DESTINATION share/${PROJECT_NAME}/
 )
 
 if(BUILD_TESTING)
