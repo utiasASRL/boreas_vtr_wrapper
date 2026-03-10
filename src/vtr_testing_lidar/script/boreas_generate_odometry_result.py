@@ -75,9 +75,13 @@ def main(dataset_dir, result_dir, velocity):
   
   T_applanix_wheel_file = os.path.join(dataset_dir, odo_input_seq, "calib/T_applanix_wheel.txt")
   if not os.path.exists(T_applanix_wheel_file):
-    print("File does not exist:", T_applanix_wheel_file)
-    return
-  T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
+    print("File does not exist:", T_applanix_wheel_file, ". Loading default.")
+    T_applanix_wheel = np.array([[0.999560,  0.029665, 0.000000, -0.813993],
+                                [-0.029665, 0.999560, 0.000000, -0.455312],
+                                [0.000000, 0.000000, 1.000000, -1.610000],
+                                [0.000000, 0.000000, 0.000000, 1.000000]])
+  else:
+    T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
   T_wheel_applanix = get_inverse_tf(T_applanix_wheel)
 
   T_wheelfwd_wheel = np.array([[0, 1, 0, 0],

@@ -1,3 +1,5 @@
+#pragma once
+
 #include <mutex>
 #include <random>
 #include <boost/algorithm/string.hpp>
@@ -89,6 +91,44 @@ struct TestControl {
   rclcpp::Subscription<rcl_interfaces::msg::ParameterEvent>::SharedPtr
       parameter_event_sub_;
 };
+
+float getFloatFromByteArray(char *byteArray, uint index) {
+  return *((float *)(byteArray + index));
+}
+
+int64_t getStampFromPath(const std::string &path) {
+  std::vector<std::string> parts;
+  boost::split(parts, path, boost::is_any_of("/"));
+  std::string stem = parts[parts.size() - 1];
+  boost::split(parts, stem, boost::is_any_of("."));
+  int64_t time1 = std::stoll(parts[0]);
+  return time1 * 1000;
+}
+
+int64_t stringToNanoseconds(const std::string &timestamp_str) {
+  size_t dot_pos = timestamp_str.find('.');
+  std::string sec_str = timestamp_str.substr(0, dot_pos);
+  std::string frac_str = (dot_pos != std::string::npos) ? timestamp_str.substr(dot_pos + 1) : "0";
+
+  if (dot_pos == std::string::npos) {
+    switch (timestamp_str.length()) {
+      case 16: // Aeva timestamp format
+        return std::stoll(timestamp_str) * 1'000;
+      case 19: // DMU timestamp format
+        return std::stoll(timestamp_str);
+      default:
+        throw std::invalid_argument("Unexpected timestamp length: " + std::to_string(timestamp_str.length()));
+    }
+  }
+
+  // Pad fractional part to exactly 9 digits (nanoseconds)
+  while (frac_str.length() < 9) frac_str += '0';
+  if (frac_str.length() > 9) frac_str = frac_str.substr(0, 9); // truncate
+
+  int64_t seconds = std::stoll(sec_str);
+  int64_t nanos = std::stoll(frac_str);
+  return seconds * 1'000'000'000LL + nanos;
+}
 
 }  // namespace testing
 }  // namespace vtr
