@@ -15,7 +15,7 @@ namespace fs = std::filesystem;
 namespace vtr {
 namespace testing {
 
-void load_lidar_groundtruth(const fs::path &path, std::vector<lgmath::se3::Transformation> &all_gt_poses, std::vector<Eigen::Vector<double, 6>> &all_gt_vels) {
+inline void load_lidar_groundtruth(const fs::path &path, std::vector<lgmath::se3::Transformation> &all_gt_poses, std::vector<Eigen::Vector<double, 6>> &all_gt_vels) {
   std::ifstream ifs(path / "applanix" / "lidar_poses.csv", std::ios::in);
   // Clear header line
   std::string line;
@@ -44,7 +44,7 @@ void load_lidar_groundtruth(const fs::path &path, std::vector<lgmath::se3::Trans
   }
 }
 
-std::pair<int64_t, Eigen::MatrixXd> load_lidar(const std::string &path) {
+inline std::pair<int64_t, Eigen::MatrixXd> load_lidar(const std::string &path) {
   std::ifstream ifs(path, std::ios::binary);
   std::vector<char> buffer(std::istreambuf_iterator<char>(ifs), {});
   uint float_offset = 4;
@@ -75,7 +75,7 @@ struct IMUMeasurement {
   long double angvel_z;
 };
 
-void load_all_imu_meas(const fs::path &imu_meas_file, std::vector<IMUMeasurement> &all_imu_meas, fs::path imu_file_name) {
+inline void load_all_imu_meas(const fs::path &imu_meas_file, std::vector<IMUMeasurement> &all_imu_meas, fs::path imu_file_name) {
   // Confirm file exists
   if (!fs::exists(imu_meas_file)) {
     CLOG(ERROR, "boreas_wrapper") << "IMU measurement file does not exist: " << imu_meas_file;
@@ -133,7 +133,7 @@ void load_all_imu_meas(const fs::path &imu_meas_file, std::vector<IMUMeasurement
   }
 }
 
-void load_wheel_encoder_data(const fs::path &path, const int encoder_max, std::vector<std::pair<int64_t, int64_t>> &all_wheel_meas) {
+inline void load_wheel_encoder_data(const fs::path &path, const int encoder_max, std::vector<std::pair<int64_t, int64_t>> &all_wheel_meas) {
   std::ifstream wheel_stream(path / "applanix" / "dmi.csv", std::ios::in);
   // Get rid of header (GPSTime,pulse_count)
   std::string header;

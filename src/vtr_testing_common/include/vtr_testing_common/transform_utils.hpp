@@ -14,7 +14,7 @@ using EdgeTransform = lgmath::se3::TransformationWithCovariance;
 namespace vtr {
 namespace testing {
 
-Eigen::Matrix4d load_T_radar_applanix(const fs::path &path) {
+inline Eigen::Matrix4d load_T_radar_applanix(const fs::path &path) {
     std::ifstream ifs1(path / "calib" / "T_applanix_lidar.txt", std::ios::in);
     std::ifstream ifs2(path / "calib" / "T_radar_lidar.txt", std::ios::in);
 
@@ -29,7 +29,7 @@ Eigen::Matrix4d load_T_radar_applanix(const fs::path &path) {
     return Eigen::Matrix4d(T_radar_lidar_mat * T_applanix_lidar_mat.inverse());
 }
 
-EdgeTransform load_T_robot_radar(const fs::path &path) {
+inline EdgeTransform load_T_robot_radar(const fs::path &path) {
     Eigen::Matrix4d identity_matrix = Eigen::Matrix4d::Identity();
     Eigen::Matrix<double, 6, 6> zero_cov = Eigen::Matrix<double, 6, 6>::Zero();
     EdgeTransform T_robot_radar(identity_matrix, zero_cov);
@@ -37,7 +37,7 @@ EdgeTransform load_T_robot_radar(const fs::path &path) {
     return T_robot_radar;
 }
 
-Eigen::Matrix4d load_T_wheel_applanix(const fs::path &path, bool aligned = false) {
+inline Eigen::Matrix4d load_T_wheel_applanix(const fs::path &path, bool aligned = false) {
     std::ifstream ifs(path / "calib" / "T_applanix_wheel.txt", std::ios::in);
     Eigen::Matrix4d T_applanix_wheel_mat;
     if (!ifs.is_open()) {
@@ -67,7 +67,7 @@ Eigen::Matrix4d load_T_wheel_applanix(const fs::path &path, bool aligned = false
     return T_wheel_applanix;
 }
 
-EdgeTransform load_T_robot_lidar(const fs::path &path) {
+inline EdgeTransform load_T_robot_lidar(const fs::path &path) {
     std::ifstream ifs(path / "calib" / "T_applanix_lidar.txt", std::ios::in);
     if (!ifs.is_open()) {
         CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_lidar.txt";
@@ -87,7 +87,7 @@ EdgeTransform load_T_robot_lidar(const fs::path &path) {
     return T_robot_lidar;
 }
 
-EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name) {
+inline EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name) {
     // Extrinsic from applanix to rear wheel
     // This transform has x forward, y left, z up
     Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path, true);
@@ -139,7 +139,7 @@ EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name
     return T_robot_imu.inverse();
 }
 
-EdgeTransform load_T_wheel_robot(const fs::path &path) {
+inline EdgeTransform load_T_wheel_robot(const fs::path &path) {
     Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path, false);
     Eigen::Matrix4d T_robot_applanix = load_T_wheel_applanix(path, true);
     EdgeTransform T_wheel_robot(Eigen::Matrix4d(T_wheel_applanix * T_robot_applanix.inverse()),
@@ -147,7 +147,7 @@ EdgeTransform load_T_wheel_robot(const fs::path &path) {
     return T_wheel_robot;
 }
 
-EdgeTransform load_T_enu_lidar_init(const fs::path &path, const bool &reverse) {
+inline EdgeTransform load_T_enu_lidar_init(const fs::path &path, const bool &reverse) {
     std::ifstream ifs(path / "applanix" / "lidar_poses.csv", std::ios::in);
 
     if (!ifs.is_open()) {

@@ -10,7 +10,7 @@
 namespace vtr {
 namespace testing {
 
-std::string random_string(std::size_t length) {
+inline std::string random_string(std::size_t length) {
   const std::string CHARACTERS = "abcdefghijklmnopqrstuvwxyz";
   std::random_device random_device;
   std::mt19937 generator(random_device());
@@ -92,11 +92,11 @@ struct TestControl {
       parameter_event_sub_;
 };
 
-float getFloatFromByteArray(char *byteArray, uint index) {
+inline float getFloatFromByteArray(char *byteArray, uint index) {
   return *((float *)(byteArray + index));
 }
 
-int64_t getStampFromPath(const std::string &path) {
+inline int64_t getStampFromPath(const std::string &path) {
   std::vector<std::string> parts;
   boost::split(parts, path, boost::is_any_of("/"));
   std::string stem = parts[parts.size() - 1];
@@ -105,7 +105,7 @@ int64_t getStampFromPath(const std::string &path) {
   return time1 * 1000;
 }
 
-int64_t stringToNanoseconds(const std::string &timestamp_str) {
+inline int64_t stringToNanoseconds(const std::string &timestamp_str) {
   size_t dot_pos = timestamp_str.find('.');
   std::string sec_str = timestamp_str.substr(0, dot_pos);
   std::string frac_str = (dot_pos != std::string::npos) ? timestamp_str.substr(dot_pos + 1) : "0";
