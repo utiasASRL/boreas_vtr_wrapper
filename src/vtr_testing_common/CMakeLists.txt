@@ -10,6 +10,7 @@ find_package(rclcpp REQUIRED)
 find_package(vtr_common REQUIRED)
 find_package(vtr_logging REQUIRED)
 find_package(lgmath REQUIRED)
+find_package(OpenCV REQUIRED)
 
 ## This package is header-only — no compiled library needed.
 ## We still declare an interface target so downstream packages can
@@ -56,6 +57,6 @@ endif()
 
 ## Export targets for downstream find_package(vtr_testing_common)
 ament_export_targets(${PROJECT_NAME}Targets HAS_LIBRARY_TARGET)
-ament_export_dependencies(rclcpp vtr_common vtr_logging)
+ament_export_dependencies(rclcpp vtr_common vtr_logging OpenCV)
 
 ament_package()

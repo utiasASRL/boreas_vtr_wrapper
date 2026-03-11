@@ -44,6 +44,35 @@ inline void load_lidar_groundtruth(const fs::path &path, std::vector<lgmath::se3
   }
 }
 
+inline void load_radar_groundtruth(const fs::path &path, std::vector<lgmath::se3::Transformation> &all_gt_poses, std::vector<Eigen::Vector<double, 6>> &all_gt_vels) {
+  std::ifstream ifs(path / "applanix" / "radar_poses.csv", std::ios::in);
+  // Clear header line
+  std::string line;
+  std::getline(ifs, line);
+  // Loop through all gt data
+  while (std::getline(ifs, line)) {
+    std::stringstream ss(line);
+    std::vector<double> gt;
+    for (std::string str; std::getline(ss, str, ',');)
+      gt.push_back(std::stod(str));
+
+    // Store gt pose
+    Eigen::Matrix4d T_ab_mat = Eigen::Matrix4d::Identity();
+    T_ab_mat.block<3, 3>(0, 0) = rpy2rot(roundToPi(gt[7]), roundToPi(gt[8]), gt[9]);
+    T_ab_mat.block<3, 1>(0, 3) << gt[1], gt[2], 0.0;
+    lgmath::se3::Transformation T_ab = lgmath::se3::Transformation(T_ab_mat);
+    all_gt_poses.push_back(T_ab.inverse());
+
+    // Store gt velocity
+    Eigen::Vector<double, 3> vbar;
+    vbar << gt[4], gt[5], gt[6];
+    vbar = T_ab_mat.block<3, 3>(0, 0).transpose() * vbar;
+    Eigen::Vector<double, 6> body_rate;
+    body_rate << vbar[0], vbar[1], 0.0, 0.0, 0.0, gt[10];
+    all_gt_vels.push_back(-body_rate);
+  }
+}
+
 inline std::pair<int64_t, Eigen::MatrixXd> load_lidar(const std::string &path) {
   std::ifstream ifs(path, std::ios::binary);
   std::vector<char> buffer(std::istreambuf_iterator<char>(ifs), {});

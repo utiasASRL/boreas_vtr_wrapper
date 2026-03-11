@@ -18,6 +18,15 @@ inline Eigen::Matrix4d load_T_radar_applanix(const fs::path &path) {
     std::ifstream ifs1(path / "calib" / "T_applanix_lidar.txt", std::ios::in);
     std::ifstream ifs2(path / "calib" / "T_radar_lidar.txt", std::ios::in);
 
+    if (!ifs1.is_open()) {
+        CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_lidar.txt";
+        throw std::invalid_argument("File not found: " + (path / "calib" / "T_applanix_lidar.txt").string());
+    }
+    if (!ifs2.is_open()) {
+        CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_radar_lidar.txt";
+        throw std::invalid_argument("File not found: " + (path / "calib" / "T_radar_lidar.txt").string());
+    }
+
     Eigen::Matrix4d T_applanix_lidar_mat;
     for (size_t row = 0; row < 4; row++)
         for (size_t col = 0; col < 4; col++) ifs1 >> T_applanix_lidar_mat(row, col);
@@ -27,14 +36,6 @@ inline Eigen::Matrix4d load_T_radar_applanix(const fs::path &path) {
         for (size_t col = 0; col < 4; col++) ifs2 >> T_radar_lidar_mat(row, col);
 
     return Eigen::Matrix4d(T_radar_lidar_mat * T_applanix_lidar_mat.inverse());
-}
-
-inline EdgeTransform load_T_robot_radar(const fs::path &path) {
-    Eigen::Matrix4d identity_matrix = Eigen::Matrix4d::Identity();
-    Eigen::Matrix<double, 6, 6> zero_cov = Eigen::Matrix<double, 6, 6>::Zero();
-    EdgeTransform T_robot_radar(identity_matrix, zero_cov);
-
-    return T_robot_radar;
 }
 
 inline Eigen::Matrix4d load_T_wheel_applanix(const fs::path &path, bool aligned = false) {
@@ -51,7 +52,6 @@ inline Eigen::Matrix4d load_T_wheel_applanix(const fs::path &path, bool aligned 
             for (size_t col = 0; col < 4; col++) ifs >> T_applanix_wheel_mat(row, col);
     }
 
-
     // This transform has y forward, x right, z up
     Eigen::Matrix4d T_wheel_applanix = T_applanix_wheel_mat.inverse();
 
@@ -67,6 +67,19 @@ inline Eigen::Matrix4d load_T_wheel_applanix(const fs::path &path, bool aligned 
     return T_wheel_applanix;
 }
 
+inline EdgeTransform load_T_robot_radar(const fs::path &path) {
+    Eigen::Matrix4d T_radar_applanix = load_T_radar_applanix(path);
+
+    // This transform has x forward, y left, z up
+    Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path, true);
+
+    // Extrinsic from radar to rear wheel
+    EdgeTransform T_robot_radar(Eigen::Matrix4d(T_wheel_applanix * T_radar_applanix.inverse()),
+                        Eigen::Matrix<double, 6, 6>::Zero());
+
+    return T_robot_radar;
+}
+
 inline EdgeTransform load_T_robot_lidar(const fs::path &path) {
     std::ifstream ifs(path / "calib" / "T_applanix_lidar.txt", std::ios::in);
     if (!ifs.is_open()) {
@@ -77,10 +90,10 @@ inline EdgeTransform load_T_robot_lidar(const fs::path &path) {
     for (size_t row = 0; row < 4; row++)
         for (size_t col = 0; col < 4; col++) ifs >> T_applanix_lidar_mat(row, col);
 
-    // Extrinsic from lidar to rear wheel
     // This transform has x forward, y left, z up
     Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path, true);
 
+    // Extrinsic from lidar to rear wheel
     EdgeTransform T_robot_lidar(Eigen::Matrix4d(T_wheel_applanix * T_applanix_lidar_mat),
                                 Eigen::Matrix<double, 6, 6>::Zero());
 
@@ -153,6 +166,43 @@ inline EdgeTransform load_T_enu_lidar_init(const fs::path &path, const bool &rev
     if (!ifs.is_open()) {
         CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "applanix" / "lidar_poses.csv";
         throw std::invalid_argument("File not found: " + (path / "applanix" / "lidar_poses.csv").string());
+    }
+
+    std::string header;
+    std::getline(ifs, header);
+
+    std::string first_pose;
+    if (reverse) {
+        std::string last_pose;
+        // If reverse, we want to get last line
+        while (std::getline(ifs, last_pose)) {
+            first_pose = last_pose;
+        }
+    } else {
+        std::getline(ifs, first_pose);
+    }
+
+    std::stringstream ss{first_pose};
+    std::vector<double> gt;
+    for (std::string str; std::getline(ss, str, ',');)
+        gt.push_back(std::stod(str));
+
+    Eigen::Matrix4d T_mat = Eigen::Matrix4d::Identity();
+    T_mat.block<3, 3>(0, 0) = rpy2rot(gt[7], gt[8], gt[9]);
+    T_mat.block<3, 1>(0, 3) << gt[1], gt[2], gt[3];
+
+    EdgeTransform T(T_mat);
+    T.setZeroCovariance();
+
+    return T;
+}
+
+inline EdgeTransform load_T_enu_radar_init(const fs::path &path, const bool &reverse) {
+    std::ifstream ifs(path / "applanix" / "radar_poses.csv", std::ios::in);
+
+    if (!ifs.is_open()) {
+        CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "applanix" / "radar_poses.csv";
+        throw std::invalid_argument("File not found: " + (path / "applanix" / "radar_poses.csv").string());
     }
 
     std::string header;
