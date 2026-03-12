@@ -179,13 +179,10 @@ EdgeTransform load_T_robot_aeva(const fs::path &path) {
     for (size_t col = 0; col < 4; col++) ifs2 >> T_aeva_lidar_mat(row, col);
 
   Eigen::Matrix4d T_applanix_aeva = T_applanix_lidar_mat * T_aeva_lidar_mat.inverse();
-  CLOG(WARNING, "boreas_wrapper") << "T_applanix_aeva: " << T_applanix_aeva;
-  CLOG(WARNING, "boreas_wrapper") << "T_aeva_applanix: " << T_applanix_aeva.inverse();
   
   // Extrinsic from lidar to rear wheel
   // This transform has x forward, y left, z up
   Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path, true);
-  CLOG(WARNING, "boreas_wrapper") << "T_wheel_applanix: " << T_wheel_applanix;
 
   EdgeTransform T_robot_aeva(Eigen::Matrix4d(T_wheel_applanix * T_applanix_aeva),   // transform
                               Eigen::Matrix<double, 6, 6>::Zero());                 // covariance
