@@ -51,16 +51,11 @@ class BagFileParser():
     return [(timestamp, deserialize_message(data, self.topic_msg_message[topic_name])) for timestamp, data in rows]
 
 
-def main(dataset_dir, result_dir, input_loc_dir):
+def main(dataset_dir, result_dir):
   result_dir = osp.normpath(result_dir)
   odo_input = osp.basename(result_dir)
-
   loc_inputs = [i for i in os.listdir(result_dir) if (i != odo_input and i.startswith("boreas"))]
   loc_inputs.sort()
-
-  if input_loc_dir in loc_inputs:
-    loc_inputs = [input_loc_dir]
-
   print("Result Directory:", result_dir)
   print("Odometry Run:", odo_input)
   print("Localization Runs:", loc_inputs)
@@ -93,12 +88,8 @@ def main(dataset_dir, result_dir, input_loc_dir):
         {int(round(int(frame.timestamp * 1e9) / precision)): frame.pose for frame in sequence.aeva_frames})
 
   print("Loaded number of odometry poses: ", len(ground_truth_poses_odo))
-  for i, loc_input in enumerate(loc_inputs):
 
-    save_loc_input = loc_input
-    # want to keep thresholding information to rename saved files later
-    if '_threshold_' in loc_input:
-      loc_input = loc_input.split('_threshold_')[0]
+  for i, loc_input in enumerate(loc_inputs):
 
     # dataset directory and necessary sequences to load
     dataset_loc = BoreasDataset(osp.normpath(dataset_dir), [[loc_input]])
@@ -129,7 +120,7 @@ def main(dataset_dir, result_dir, input_loc_dir):
 
     print("Loaded number of localization poses: ", len(ground_truth_poses_loc))
 
-    loc_dir = osp.join(result_dir, save_loc_input)
+    loc_dir = osp.join(result_dir, loc_input)
 
     data_dir = osp.join(loc_dir, "graph/data")
     if not osp.exists(data_dir):
@@ -152,6 +143,7 @@ def main(dataset_dir, result_dir, input_loc_dir):
       T_test_map_in_lidar = T_lidar_robot_loc @ T_test_map @ T_robot_lidar_odo
       T_map_test_in_lidar = get_inverse_tf(T_test_map_in_lidar)
       T_map_test_in_lidar_res = T_map_test_in_lidar.flatten().tolist()[:12]
+      result.append([test_seq_timestamp, map_seq_timestamp] + T_map_test_in_lidar_res)
 
       if not int(round(int(message[1].timestamp) / precision)) in ground_truth_poses_loc.keys():
         print("WARNING: time stamp not found in loc keys: ", int(round(int(message[1].timestamp) / precision)))
@@ -159,7 +151,6 @@ def main(dataset_dir, result_dir, input_loc_dir):
       if not int(round(int(message[1].vertex_timestamp) / precision)) in ground_truth_poses_odo.keys():
         print("WARNING: time stamp not found in odo keys: ", int(round(int(message[1].vertex_timestamp) / precision)))
         continue
-      result.append([test_seq_timestamp, map_seq_timestamp] + T_map_test_in_lidar_res)
 
       test_seq_timestamp = int(round(int(message[1].timestamp) / precision))
       map_seq_timestamp = int(round(int(message[1].vertex_timestamp) / precision))
@@ -178,10 +169,10 @@ def main(dataset_dir, result_dir, input_loc_dir):
 
     output_dir = osp.join(result_dir, "localization_result")
     os.makedirs(output_dir, exist_ok=True)
-    with open(osp.join(output_dir, save_loc_input + ".txt"), "+w") as file:
+    with open(osp.join(output_dir, loc_input + ".txt"), "+w") as file:
       writer = csv.writer(file, delimiter=' ')
       writer.writerows(result)
-      print("Written to file:", osp.join(output_dir, save_loc_input + ".txt"))
+      print("Written to file:", osp.join(output_dir, loc_input + ".txt"))
 
 
 if __name__ == "__main__":
@@ -193,8 +184,7 @@ if __name__ == "__main__":
   # <rosbag name>/<rosbag name>_0.db3
   parser.add_argument('--dataset', default=os.getcwd(), type=str, help='path to boreas dataset (contains boreas-*)')
   parser.add_argument('--path', default=os.getcwd(), type=str, help='path to vtr folder (default: os.getcwd())')
-  parser.add_argument('--input_loc_dir', default=os.getcwd(), type=str, help='input localization directory')
 
   args = parser.parse_args()
 
-  main(args.dataset, args.path, args.input_loc_dir)
+  main(args.dataset, args.path)
