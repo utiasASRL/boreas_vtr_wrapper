@@ -12,7 +12,8 @@
 #include "vtr_tactic/rviz_tactic_callback.hpp"
 #include "vtr_tactic/tactic.hpp"
 
-#include "vtr_testing_radar/utils.hpp"
+#include "vtr_testing_common/vtr_testing_common.hpp"
+#include "vtr_testing_common/radar_utils.hpp"
 
 namespace fs = std::filesystem;
 using namespace vtr;
@@ -20,23 +21,6 @@ using namespace vtr::common;
 using namespace vtr::logging;
 using namespace vtr::tactic;
 using namespace vtr::testing;
-
-int64_t getStampFromPath(const std::string &path) {
-  std::vector<std::string> parts;
-  boost::split(parts, path, boost::is_any_of("/"));
-  std::string stem = parts[parts.size() - 1];
-  boost::split(parts, stem, boost::is_any_of("."));
-  int64_t time1 = std::stoll(parts[0]);
-  return time1 * 1000;
-}
-
-EdgeTransform load_T_robot_radar(const fs::path &path) {
-  Eigen::Matrix4d identity_matrix = Eigen::Matrix4d::Identity();
-  Eigen::Matrix<double, 6, 6> zero_cov = Eigen::Matrix<double, 6, 6>::Zero();
-  EdgeTransform T_robot_radar(identity_matrix, zero_cov);
-
-  return T_robot_radar;
-}
 
 
 int main(int argc, char **argv) {
