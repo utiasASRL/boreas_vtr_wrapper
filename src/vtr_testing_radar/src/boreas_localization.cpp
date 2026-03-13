@@ -189,8 +189,7 @@ int main(int argc, char **argv) {
   msg.child_frame_id = radar_frame;
   tf_sbc->sendTransform(msg);
 
-  const auto clock_publisher =
-      node->create_publisher<rosgraph_msgs::msg::Clock>("/clock", 10);
+  const auto clock_publisher = node->create_publisher<rosgraph_msgs::msg::Clock>("/clock", 10);
 
   // List of radar data
   std::vector<fs::directory_entry> files;
