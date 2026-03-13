@@ -68,9 +68,35 @@ def main(dataset_dir, result_dir, quiet=False):
   # generate ground truth pose dictionary
   ground_truth_poses_odo = dict()
   for sequence in dataset_odo.sequences:
-    # Using radar frame as robot frame for SE(2) radar odometry
-    # This was approved by Tim in October 2025
-    T_robot_radar_odo = np.eye(4)
+    T_applanix_wheel_file = os.path.join(dataset_dir, odo_input, "calib/T_applanix_wheel.txt")
+    if not os.path.exists(T_applanix_wheel_file):
+      print("File does not exist:", T_applanix_wheel_file, ". Loading default.")
+      T_applanix_wheel = np.array([[0.999560,  0.029665, 0.000000, -0.813993],
+                                  [-0.029665, 0.999560, 0.000000, -0.455312],
+                                  [0.000000, 0.000000, 1.000000, -1.610000],
+                                  [0.000000, 0.000000, 0.000000, 1.000000]])
+    else:
+      T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
+    T_wheel_applanix = get_inverse_tf(T_applanix_wheel)
+    T_wheelfwd_wheel = np.array([[0, 1, 0, 0],
+                                [-1, 0, 0, 0],
+                                [0, 0, 1, 0],
+                                [0, 0, 0, 1]])
+    T_robot_applanix = T_wheelfwd_wheel @ T_wheel_applanix
+
+    # Load in T_radar_applanix
+    T_radar_lidar_file = os.path.join(dataset_dir, odo_input, "calib/T_radar_lidar.txt")
+    if not os.path.exists(T_radar_lidar_file):
+      raise Exception("File does not exist: " + T_radar_lidar_file)
+    T_radar_lidar = np.loadtxt(T_radar_lidar_file)
+    T_applanix_lidar_file = os.path.join(dataset_dir, odo_input, "calib/T_applanix_lidar.txt")
+    if not os.path.exists(T_applanix_lidar_file):
+      raise Exception("File does not exist: " + T_applanix_lidar_file)
+    T_applanix_lidar = np.loadtxt(T_applanix_lidar_file)
+    T_radar_applanix = T_radar_lidar @ get_inverse_tf(T_applanix_lidar)
+
+    # Compute final transform from radar to robot frame
+    T_robot_radar_odo = T_robot_applanix @ get_inverse_tf(T_radar_applanix)
 
     # build dictionary
     precision = 1e7  # divide by this number to ensure always find the timestamp
