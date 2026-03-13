@@ -16,8 +16,6 @@ find_package(vtr_testing_common REQUIRED)
 find_package(vtr_radar REQUIRED)
 find_package(vtr_torch REQUIRED)
 
-## C++ Libraries
-
 ## Executables
 add_executable(${PROJECT_NAME}_boreas_preprocessing src/boreas_preprocessing.cpp)
 ament_target_dependencies(${PROJECT_NAME}_boreas_preprocessing rclcpp std_msgs vtr_testing_common vtr_radar vtr_torch)
@@ -38,7 +36,6 @@ install(
   RUNTIME DESTINATION lib/${PROJECT_NAME}
   INCLUDES DESTINATION include
 )
-
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
