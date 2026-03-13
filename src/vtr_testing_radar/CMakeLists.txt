@@ -11,7 +11,6 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(lgmath REQUIRED)
-find_package(spinning_radar_doppler REQUIRED)
 
 find_package(vtr_testing_common REQUIRED)
 find_package(vtr_radar REQUIRED)
