@@ -12,7 +12,7 @@
 #include "vtr_tactic/rviz_tactic_callback.hpp"
 #include "vtr_tactic/tactic.hpp"
 
-#include "vtr_testing_radar_lidar/utils.hpp"
+#include "vtr_testing_common/vtr_testing_common.hpp"
 
 namespace fs = std::filesystem;
 using namespace vtr;
@@ -21,138 +21,6 @@ using namespace vtr::logging;
 using namespace vtr::tactic;
 using namespace vtr::testing;
 
-int64_t getStampFromPath(const std::string &path) {
-  std::vector<std::string> parts;
-  boost::split(parts, path, boost::is_any_of("/"));
-  std::string stem = parts[parts.size() - 1];
-  boost::split(parts, stem, boost::is_any_of("."));
-  int64_t time1 = std::stoll(parts[0]);
-  return time1 * 1000;
-}
-
-Eigen::Matrix4d load_T_wheel_applanix(const fs::path &path, bool aligned = false) {
-  std::ifstream ifs(path / "calib" / "T_applanix_wheel.txt", std::ios::in);
-  if (!ifs.is_open()) {
-    CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_wheel.txt";
-    throw std::invalid_argument("File not found: " + (path / "calib" / "T_applanix_wheel.txt").string());
-  }
-  Eigen::Matrix4d T_applanix_wheel_mat;
-  for (size_t row = 0; row < 4; row++)
-    for (size_t col = 0; col < 4; col++) ifs >> T_applanix_wheel_mat(row, col);
-  
-
-  // This transform has y forward, x right, z up
-  Eigen::Matrix4d T_wheel_applanix = T_applanix_wheel_mat.inverse();
-
-  if (aligned) {
-    // Rotate it so that x is forward to make it more intuitive
-    Eigen::Matrix4d T_wheelfwd_wheel = Eigen::Matrix4d::Identity();
-    T_wheelfwd_wheel.block<3, 3>(0, 0) << 0, 1, 0,
-                                      -1, 0, 0,
-                                      0, 0, 1;
-    T_wheel_applanix = T_wheelfwd_wheel * T_wheel_applanix;
-  }
-
-  return T_wheel_applanix;
-}
-
-EdgeTransform load_T_robot_lidar(const fs::path &path) {
-  std::ifstream ifs(path / "calib" / "T_applanix_lidar.txt", std::ios::in);
-  if (!ifs.is_open()) {
-    CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_lidar.txt";
-    throw std::invalid_argument("File not found: " + (path / "calib" / "T_applanix_lidar.txt").string());
-  }
-  Eigen::Matrix4d T_applanix_lidar_mat;
-  for (size_t row = 0; row < 4; row++)
-    for (size_t col = 0; col < 4; col++) ifs >> T_applanix_lidar_mat(row, col);
-
-  // Extrinsic from lidar to rear wheel
-  // This transform has x forward, y left, z up
-  Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path, true);
-
-  EdgeTransform T_robot_lidar(Eigen::Matrix4d(T_wheel_applanix * T_applanix_lidar_mat),
-                              Eigen::Matrix<double, 6, 6>::Zero());
-
-  return T_robot_lidar;
-}
-
-EdgeTransform load_T_robot_radar(const fs::path &path) {
-  Eigen::Matrix4d identity_matrix = Eigen::Matrix4d::Identity();
-  Eigen::Matrix<double, 6, 6> zero_cov = Eigen::Matrix<double, 6, 6>::Zero();
-  EdgeTransform T_robot_radar(identity_matrix, zero_cov);
-
-  return T_robot_radar;
-}
-
-Eigen::Matrix3d toRoll(const double &r) {
-  Eigen::Matrix3d roll;
-  roll << 1, 0, 0, 0, cos(r), sin(r), 0, -sin(r), cos(r);
-  return roll;
-}
-
-Eigen::Matrix3d toPitch(const double &p) {
-  Eigen::Matrix3d pitch;
-  pitch << cos(p), 0, -sin(p), 0, 1, 0, sin(p), 0, cos(p);
-  return pitch;
-}
-
-Eigen::Matrix3d toYaw(const double &y) {
-  Eigen::Matrix3d yaw;
-  yaw << cos(y), sin(y), 0, -sin(y), cos(y), 0, 0, 0, 1;
-  return yaw;
-}
-
-Eigen::Matrix3d rpy2rot(const double &r, const double &p, const double &y) {
-  return toRoll(r) * toPitch(p) * toYaw(y);
-}
-
-EdgeTransform load_T_enu_lidar_init(const fs::path &path) {
-  std::ifstream ifs(path / "applanix" / "lidar_poses.csv", std::ios::in);
-
-  std::string header;
-  std::getline(ifs, header);
-
-  std::string first_pose;
-  std::getline(ifs, first_pose);
-
-  std::stringstream ss{first_pose};
-  std::vector<double> gt;
-  for (std::string str; std::getline(ss, str, ',');)
-    gt.push_back(std::stod(str));
-
-  Eigen::Matrix4d T_mat = Eigen::Matrix4d::Identity();
-  T_mat.block<3, 3>(0, 0) = rpy2rot(gt[7], gt[8], gt[9]);
-  T_mat.block<3, 1>(0, 3) << gt[1], gt[2], gt[3];
-
-  EdgeTransform T(T_mat);
-  T.setZeroCovariance();
-
-  return T;
-}
-
-EdgeTransform load_T_enu_radar_init(const fs::path &path) {
-  std::ifstream ifs(path / "applanix" / "radar_poses.csv", std::ios::in);
-
-  std::string header;
-  std::getline(ifs, header);
-
-  std::string first_pose;
-  std::getline(ifs, first_pose);
-
-  std::stringstream ss{first_pose};
-  std::vector<double> gt;
-  for (std::string str; std::getline(ss, str, ',');)
-    gt.push_back(std::stod(str));
-
-  Eigen::Matrix4d T_mat = Eigen::Matrix4d::Identity();
-  T_mat.block<3, 3>(0, 0) = rpy2rot(gt[7], gt[8], gt[9]);
-  T_mat.block<3, 1>(0, 3) << gt[1], gt[2], gt[3];
-
-  EdgeTransform T(T_mat);
-  T.setZeroCovariance();
-
-  return T;
-}
 
 int main(int argc, char **argv) {
   // disable eigen multi-threading
@@ -243,11 +111,12 @@ int main(int argc, char **argv) {
 
   /// NOTE: odometry is teach, localization is repeat
   auto T_loc_odo_init = [&]() {
+    // TODO: Add reverse options for radar-lidar loc
     const auto T_robot_lidar_odo = load_T_robot_lidar(odo_dir);
-    const auto T_enu_lidar_odo = load_T_enu_lidar_init(odo_dir);
+    const auto T_enu_lidar_odo = load_T_enu_lidar_init(odo_dir, false);
 
     const auto T_robot_radar_loc = load_T_robot_radar(loc_dir);
-    const auto T_enu_radar_loc = load_T_enu_radar_init(loc_dir);
+    const auto T_enu_radar_loc = load_T_enu_radar_init(loc_dir, false);
 
     return T_robot_radar_loc * T_enu_radar_loc.inverse() * T_enu_lidar_odo *
            T_robot_lidar_odo.inverse();
