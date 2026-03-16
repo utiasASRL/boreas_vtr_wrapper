@@ -98,7 +98,6 @@ int main(int argc, char **argv) {
   const auto encoder_max = node->declare_parameter<int>("boreas.wheel_encoder.encoder_max", 16777216);
   CLOG(WARNING, "boreas_wrapper") << "Wheel encoder enabled: " << use_wheel_encoder;
   std::vector<std::pair<int64_t, int64_t>> all_wheel_meas;
-  double wheel_param = 0.0;
   EdgeTransform T_wheel_robot; 
   if (use_wheel_encoder) {
     load_wheel_encoder_data(loc_dir, encoder_max, all_wheel_meas);
@@ -253,12 +252,10 @@ int main(int argc, char **argv) {
     // Feed in IMU data if available/desired
     std::vector<sensor_msgs::msg::Imu> gyro_msgs;
     if (use_imu) {
-      int64_t timestamp_imu = all_imu_meas[imu_counter].timestamp_ns;
       int64_t start_timestamp;
       int64_t end_timestamp;
       load_radar_time_span(scan, start_timestamp, end_timestamp);
 
-      CLOG(WARNING, "boreas_wrapper") << "IMU timestamp: " << timestamp_imu;
       CLOG(WARNING, "boreas_wrapper") << "Radar start timestamp: " << start_timestamp;
       CLOG(WARNING, "boreas_wrapper") << "Radar end timestamp: " << end_timestamp;
 
@@ -287,7 +284,6 @@ int main(int argc, char **argv) {
     // Feed in wheel encoder data if available/desired
     std::vector<std::pair<rclcpp::Time, double>> wheel_meas;
     if (use_wheel_encoder) {
-      int64_t timestamp_wheel = all_wheel_meas[wheel_counter].first;
       int64_t start_timestamp;
       int64_t end_timestamp;
       load_radar_time_span(scan, start_timestamp, end_timestamp);
