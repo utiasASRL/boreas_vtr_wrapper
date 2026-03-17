@@ -43,7 +43,7 @@ inline Eigen::Matrix4d load_T_wheel_applanix(const fs::path &path, bool aligned 
     Eigen::Matrix4d T_applanix_wheel_mat;
     if (!ifs.is_open()) {
         CLOG(WARNING, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_wheel.txt. Loading default.";
-        T_applanix_wheel_mat << 0.999560,  0.029665, 0.000000, -0.813993,
+        T_applanix_wheel_mat << 0.999560, 0.029665, 0.000000, -0.813993,
                                -0.029665, 0.999560, 0.000000, -0.455312,
                                 0.000000, 0.000000, 1.000000, -1.610000,
                                 0.000000, 0.000000, 0.000000, 1.000000;
@@ -59,8 +59,8 @@ inline Eigen::Matrix4d load_T_wheel_applanix(const fs::path &path, bool aligned 
         // Rotate it so that x is forward to make it more intuitive
         Eigen::Matrix4d T_wheelfwd_wheel = Eigen::Matrix4d::Identity();
         T_wheelfwd_wheel.block<3, 3>(0, 0) << 0, 1, 0,
-                                            -1, 0, 0,
-                                            0, 0, 1;
+                                             -1, 0, 0,
+                                              0, 0, 1;
         T_wheel_applanix = T_wheelfwd_wheel * T_wheel_applanix;
     }
 
@@ -137,10 +137,10 @@ inline EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &i
     // Extrinsic from applanix to applanix IMU
     Eigen::Matrix4d T_imu_applanix;
     // Rotate applanix 90 degrees about z axis and then 180 degrees about y axis
-    T_imu_applanix << 0, -1, 0, 0,
-                        -1, 0, 0, 0,
-                        0, 0, -1, 0,
-                        0, 0, 0, 1;
+    T_imu_applanix << 0, -1,  0,  0,
+                     -1,  0,  0,  0,
+                      0,  0, -1,  0,
+                      0,  0,  0,  1;
 
     T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_wheel_applanix * T_imu_applanix.inverse()),
                                 Eigen::Matrix<double, 6, 6>::Zero());
@@ -160,12 +160,12 @@ inline EdgeTransform load_T_wheel_robot(const fs::path &path) {
     return T_wheel_robot;
 }
 
-inline EdgeTransform load_T_enu_lidar_init(const fs::path &path, const bool &reverse) {
-    std::ifstream ifs(path / "applanix" / "lidar_poses.csv", std::ios::in);
+inline EdgeTransform load_T_enu_init(const fs::path &path, const bool &reverse, const std::string &sensor="lidar") {
+    std::ifstream ifs(path / "applanix" / (sensor + "_poses.csv"), std::ios::in);
 
     if (!ifs.is_open()) {
-        CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "applanix" / "lidar_poses.csv";
-        throw std::invalid_argument("File not found: " + (path / "applanix" / "lidar_poses.csv").string());
+        CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "applanix" / (sensor + "_poses.csv");
+        throw std::invalid_argument("File not found: " + (path / "applanix" / (sensor + "_poses.csv")).string());
     }
 
     std::string header;
@@ -196,44 +196,6 @@ inline EdgeTransform load_T_enu_lidar_init(const fs::path &path, const bool &rev
 
     return T;
 }
-
-inline EdgeTransform load_T_enu_radar_init(const fs::path &path, const bool &reverse) {
-    std::ifstream ifs(path / "applanix" / "radar_poses.csv", std::ios::in);
-
-    if (!ifs.is_open()) {
-        CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "applanix" / "radar_poses.csv";
-        throw std::invalid_argument("File not found: " + (path / "applanix" / "radar_poses.csv").string());
-    }
-
-    std::string header;
-    std::getline(ifs, header);
-
-    std::string first_pose;
-    if (reverse) {
-        std::string last_pose;
-        // If reverse, we want to get last line
-        while (std::getline(ifs, last_pose)) {
-            first_pose = last_pose;
-        }
-    } else {
-        std::getline(ifs, first_pose);
-    }
-
-    std::stringstream ss{first_pose};
-    std::vector<double> gt;
-    for (std::string str; std::getline(ss, str, ',');)
-        gt.push_back(std::stod(str));
-
-    Eigen::Matrix4d T_mat = Eigen::Matrix4d::Identity();
-    T_mat.block<3, 3>(0, 0) = rpy2rot(gt[7], gt[8], gt[9]);
-    T_mat.block<3, 1>(0, 3) << gt[1], gt[2], gt[3];
-
-    EdgeTransform T(T_mat);
-    T.setZeroCovariance();
-
-    return T;
-}
-
 
 } // namespace testing
 } // namespace vtr

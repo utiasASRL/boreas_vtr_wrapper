@@ -157,10 +157,10 @@ int main(int argc, char **argv) {
   /// NOTE: odometry is teach, localization is repeat
   auto T_loc_odo_init = [&]() {
     const auto T_robot_radar_odo = load_T_robot_radar(odo_dir);
-    const auto T_enu_radar_odo = load_T_enu_radar_init(odo_dir, reverse);
+    const auto T_enu_radar_odo = load_T_enu_init(odo_dir, reverse, "radar");
 
     const auto T_robot_radar_loc = load_T_robot_radar(loc_dir);
-    const auto T_enu_radar_loc = load_T_enu_radar_init(loc_dir, false);
+    const auto T_enu_radar_loc = load_T_enu_init(loc_dir, false, "radar");
 
     return T_robot_radar_loc * T_enu_radar_loc.inverse() * T_enu_radar_odo *
            T_robot_radar_odo.inverse();

@@ -166,10 +166,10 @@ int main(int argc, char **argv) {
   /// NOTE: odometry is teach, localization is repeat
   auto T_loc_odo_init = [&]() {
     const auto T_robot_lidar_odo = load_T_robot_lidar(odo_dir);
-    const auto T_enu_lidar_odo = load_T_enu_lidar_init(odo_dir, reverse);
+    const auto T_enu_lidar_odo = load_T_enu_init(odo_dir, reverse, "lidar");
 
     const auto T_robot_lidar_loc = load_T_robot_lidar(loc_dir);
-    const auto T_enu_lidar_loc = load_T_enu_lidar_init(loc_dir, false);
+    const auto T_enu_lidar_loc = load_T_enu_init(loc_dir, false, "lidar");
 
     return T_robot_lidar_loc * T_enu_lidar_loc.inverse() * T_enu_lidar_odo *
            T_robot_lidar_odo.inverse();
@@ -218,7 +218,7 @@ int main(int argc, char **argv) {
   T_lid_world_gt.reserve(files.size());
   v_lid_gt.reserve(files.size());
   if (load_gt) {
-    load_lidar_groundtruth(loc_dir, T_lid_world_gt, v_lid_gt);
+    load_lidar_groundtruth(loc_dir, T_lid_world_gt, v_lid_gt, "lidar");
     CLOG(WARNING, "boreas_wrapper") << "Loaded groundtruth for " << T_lid_world_gt.size() << " frames";
   }
 
