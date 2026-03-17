@@ -626,6 +626,7 @@ int main(int argc, char **argv) {
   int imu_counter = 0;
   int wheel_counter = 0;
   auto it = files.begin();
+  const int64_t offset_ns = 100000000LL; 
   while (it != files.end()) {
     if (!rclcpp::ok()) break;
     rclcpp::spin_some(node);
@@ -655,7 +656,8 @@ int main(int argc, char **argv) {
     std::vector<sensor_msgs::msg::Imu> gyro_msgs;
     if (use_imu) {
       int64_t start_timestamp = points(0, 5);
-      int64_t end_timestamp = std::min(points(points.rows() - 1, 5), double(timestamp + 100000000));
+      int64_t end_timestamp = std::min(static_cast<int64_t>(points(points.rows() - 1, 5)), 
+                                       timestamp + offset_ns);
 
       if (imu_counter == 0) {
         // Find IMU measurement right before lidar frame to initialize
@@ -666,7 +668,6 @@ int main(int argc, char **argv) {
 
       // Loop through all IMU measurements from previous one to end of current lidar frame
       // This captures IMU measurements that are between frames
-      Eigen::Matrix<double, 4, 1> imu_meas;
       while (imu_counter < all_imu_meas.size() && all_imu_meas[imu_counter].timestamp_ns < end_timestamp) {
         auto gyro_msg = sensor_msgs::msg::Imu();
         gyro_msg.angular_velocity.x = all_imu_meas[imu_counter].angvel_x;
@@ -683,7 +684,8 @@ int main(int argc, char **argv) {
     std::vector<std::pair<rclcpp::Time, double>> wheel_meas;
     if (use_wheel_encoder) {
       int64_t start_timestamp = points(0, 5);
-      int64_t end_timestamp = std::min(points(points.rows() - 1, 5), double(timestamp + 100000000));
+      int64_t end_timestamp = std::min(static_cast<int64_t>(points(points.rows() - 1, 5)), 
+                                       timestamp + offset_ns);
 
       if (wheel_counter == 0) {
         // Find wheel measurement right before lidar frame to initialize
