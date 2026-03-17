@@ -10,9 +10,9 @@ find_package(ament_cmake REQUIRED)
 
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(lgmath REQUIRED)
 
-find_package(vtr_common REQUIRED)
-find_package(vtr_logging REQUIRED)
+find_package(vtr_testing_common REQUIRED)
 find_package(vtr_lidar REQUIRED)
 find_package(vtr_torch REQUIRED)
 
@@ -26,15 +26,10 @@ include_directories(
 )
 
 add_executable(${PROJECT_NAME}_aeva_boreas_odometry src/aeva_boreas_odometry.cpp)
-ament_target_dependencies(${PROJECT_NAME}_aeva_boreas_odometry rclcpp std_msgs vtr_common vtr_logging vtr_lidar vtr_torch)
+ament_target_dependencies(${PROJECT_NAME}_aeva_boreas_odometry rclcpp std_msgs vtr_testing_common vtr_lidar vtr_torch)
 
 add_executable(${PROJECT_NAME}_aeva_boreas_localization src/aeva_boreas_localization.cpp)
-ament_target_dependencies(${PROJECT_NAME}_aeva_boreas_localization rclcpp std_msgs vtr_common vtr_logging vtr_lidar vtr_torch)
-
-install(
-  DIRECTORY include/
-  DESTINATION include
-)
+ament_target_dependencies(${PROJECT_NAME}_aeva_boreas_localization rclcpp std_msgs vtr_testing_common vtr_lidar vtr_torch)
 
 install(
   TARGETS
@@ -44,11 +39,6 @@ install(
   ARCHIVE DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
   INCLUDES DESTINATION include
-)
-
-install(
-  DIRECTORY config
-  DESTINATION share/${PROJECT_NAME}/
 )
 
 if(BUILD_TESTING)

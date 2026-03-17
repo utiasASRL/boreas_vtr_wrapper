@@ -15,8 +15,8 @@ namespace fs = std::filesystem;
 namespace vtr {
 namespace testing {
 
-inline void load_lidar_groundtruth(const fs::path &path, std::vector<lgmath::se3::Transformation> &all_gt_poses, std::vector<Eigen::Vector<double, 6>> &all_gt_vels) {
-  std::ifstream ifs(path / "applanix" / "lidar_poses.csv", std::ios::in);
+inline void load_lidar_groundtruth(const fs::path &path, std::vector<lgmath::se3::Transformation> &all_gt_poses, std::vector<Eigen::Vector<double, 6>> &all_gt_vels, const std::string &sensor="lidar") {
+  std::ifstream ifs(path / "applanix" / (sensor + "_poses.csv"), std::ios::in);
   // Clear header line
   std::string line;
   std::getline(ifs, line);
@@ -94,6 +94,76 @@ inline std::pair<int64_t, Eigen::MatrixXd> load_lidar(const std::string &path) {
   pc.block(0, 5, N, 1).array() += t;
 
   return std::make_pair(timestamp, std::move(pc));
+}
+
+inline std::pair<int64_t, Eigen::MatrixXd> load_aeva(const std::string &path) {
+  // load Aeries II pointcloud
+  std::ifstream ifs(path, std::ios::binary);
+  std::vector<char> buffer(std::istreambuf_iterator<char>(ifs), {});
+  unsigned float_offset = 4; // float32
+  // 9 point cloud fields, use 10 because point_flags is 64 bits
+  unsigned fields = 10;  // x, y, z, radial velocity, intensity, signal quality, reflectivity, time, point_flags (beam_id, line_id, face_id)
+  unsigned point_step = float_offset * fields;
+  unsigned N = floor(buffer.size() / point_step);
+
+  std::vector<Eigen::VectorXd> points; // Vector to store valid points dynamically
+
+  const auto timestamp = getStampFromPath(path);
+  double t = double(timestamp);
+
+  for (uint i = 0; i < N; i++) {
+    int bufpos = i * point_step;
+    int offset = 0;
+
+    // Temporary variables
+    double x, y, z, radial_velocity, intensity, time_temp;
+    uint64_t point_flags;
+    int line_id, face_id;
+
+    // x, y, z
+    x = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
+    ++offset;
+    y = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
+    ++offset;
+    z = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
+
+    ++offset;
+    // Radial velocity
+    radial_velocity = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
+    ++offset;
+    // Intensity
+    intensity = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
+    ++offset;
+    // Skip signal quality
+    ++offset;
+    // Skip reflectivity
+    ++offset;
+    // Timestamp
+    time_temp = (int64_t)(getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset)); // nanosec
+    time_temp += t;
+    ++offset;
+    // Point Flags (64 bit flag, only need first 32 bits)
+    point_flags = int(getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset));
+
+    // Extract flags
+    line_id = ((point_flags >> 8) & 0xFF);
+    face_id = ((point_flags >> 22) & 0xF);
+
+    // Error checks
+    if (line_id < 0 || line_id >= 64) continue;
+    if (face_id < 0 || face_id > 5) continue;
+
+    Eigen::VectorXd point(8);
+    point << x, y, z, radial_velocity, intensity, time_temp, line_id, face_id;
+    points.push_back(point);
+  }
+
+  // Convert vector to Eigen::MatrixXd
+  Eigen::MatrixXd pc(points.size(), 8);
+  for (size_t k = 0; k < points.size(); ++k) {
+    pc.row(k) = points[k];
+  }
+  return std::make_pair(timestamp, pc);
 }
 
 struct IMUMeasurement {
