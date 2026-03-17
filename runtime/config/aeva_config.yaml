@@ -19,7 +19,8 @@
         # "lidar.preprocessing",
         # "lidar.preprocessing_doppler",
         # "lidar.odometry_icp",
-        "lidar.odometry_doppler",
+        # "lidar.odometry_wheel",
+        # "lidar.odometry_doppler",
         # "lidar.odometry_map_maintenance",
         # "lidar.vertex_test",
         # "lidar.localization_map_recall",
@@ -194,18 +195,18 @@
         num_threads: 10
         # wheel odometry parameters       
         potentially_slipping: true
-        estimate_bias: true
+        estimate_bias: false
         bias_alpha: 0.005
         min_time_bias_count: 200.0   # 1 / median time diff between IMU measurements (applanix ~200)
-        wheel_parameter: 0.00052201
+        # wheel_parameter: 0.00052201
         # wheel_parameter: 0.00052229 
-        # wheel_parameter: 0.00052217
+        wheel_parameter: 0.00052217
         #
         visualize: false
 
       doppler:
         type: lidar.odometry_doppler
-        num_threads: 1
+        num_threads: 10
         #
         traj_qc_diag: [1.0, 0.001, 0.001, 0.001, 0.001, 1.0]
         # ransac
@@ -219,6 +220,7 @@
         integration_steps: 100
         zero_vel_tol: 0.03
         gyro_cov: [0.00005475, 0.00008683, 0.00002507] # good
+        estimate_bias: false
         # inits
         P0inv: [1e4, 1e4, 1e4, 1e6, 1e6, 1e6]
         Qkinv: [124.097194, 852.430330017, 448.704299478, 1128.19639192, 1230.02908934, 11316.9459369]
