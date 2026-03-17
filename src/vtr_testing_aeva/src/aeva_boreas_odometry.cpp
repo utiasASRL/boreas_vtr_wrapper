@@ -14,39 +14,12 @@
 
 #include "vtr_testing_common/vtr_testing_common.hpp"
 
-#include <iomanip>
-#include <iostream>
-#include <fstream>
-
 namespace fs = std::filesystem;
 using namespace vtr;
 using namespace vtr::common;
 using namespace vtr::logging;
 using namespace vtr::tactic;
 using namespace vtr::testing;
-
-EdgeTransform load_T_robot_aeva(const fs::path &path) {
-  std::ifstream ifs1(path / "calib" / "T_applanix_lidar.txt", std::ios::in);
-  std::ifstream ifs2(path / "calib" / "T_aeva_lidar.txt", std::ios::in);
-
-  Eigen::Matrix4d T_applanix_lidar_mat;
-  for (size_t row = 0; row < 4; row++)
-    for (size_t col = 0; col < 4; col++) ifs1 >> T_applanix_lidar_mat(row, col);
-
-  Eigen::Matrix4d T_aeva_lidar_mat;
-  for (size_t row = 0; row < 4; row++)
-    for (size_t col = 0; col < 4; col++) ifs2 >> T_aeva_lidar_mat(row, col);
-
-  Eigen::Matrix4d T_applanix_aeva = T_applanix_lidar_mat * T_aeva_lidar_mat.inverse();
-  
-  // Extrinsic from lidar to rear wheel
-  // This transform has x forward, y left, z up
-  Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path, true);
-
-  EdgeTransform T_robot_aeva(Eigen::Matrix4d(T_wheel_applanix * T_applanix_aeva),   // transform
-                              Eigen::Matrix<double, 6, 6>::Zero());                 // covariance
-  return T_robot_aeva;
-}
 
 int main(int argc, char **argv) {
   // disable eigen multi-threading
