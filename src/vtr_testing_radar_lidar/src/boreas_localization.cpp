@@ -113,10 +113,10 @@ int main(int argc, char **argv) {
   auto T_loc_odo_init = [&]() {
     // TODO: Add reverse options for radar-lidar loc
     const auto T_robot_lidar_odo = load_T_robot_lidar(odo_dir);
-    const auto T_enu_lidar_odo = load_T_enu_lidar_init(odo_dir, false);
+    const auto T_enu_lidar_odo = load_T_enu_init(odo_dir, false, "lidar");
 
     const auto T_robot_radar_loc = load_T_robot_radar(loc_dir);
-    const auto T_enu_radar_loc = load_T_enu_radar_init(loc_dir, false);
+    const auto T_enu_radar_loc = load_T_enu_init(loc_dir, false, "radar");
 
     return T_robot_radar_loc * T_enu_radar_loc.inverse() * T_enu_lidar_odo *
            T_robot_lidar_odo.inverse();

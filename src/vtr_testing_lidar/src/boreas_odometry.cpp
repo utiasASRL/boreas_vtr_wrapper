@@ -162,7 +162,7 @@ int main(int argc, char **argv) {
   T_lid_world_gt.reserve(files.size());
   v_lid_gt.reserve(files.size());
   if (load_gt) {
-    load_lidar_groundtruth(odo_dir, T_lid_world_gt, v_lid_gt);
+    load_lidar_groundtruth(odo_dir, T_lid_world_gt, v_lid_gt, "lidar");
     CLOG(WARNING, "boreas_wrapper") << "Loaded groundtruth for " << T_lid_world_gt.size() << " frames";
   }
 

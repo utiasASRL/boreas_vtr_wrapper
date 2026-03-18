@@ -12,10 +12,7 @@
 #include "vtr_tactic/rviz_tactic_callback.hpp"
 #include "vtr_tactic/tactic.hpp"
 
-#include "yaml-cpp/yaml.h"
-#include "vtr_testing_aeva/utils.hpp"
-#include <iomanip>
-#include <fstream>
+#include "vtr_testing_common/vtr_testing_common.hpp"
 
 namespace fs = std::filesystem;
 using namespace vtr;
@@ -23,402 +20,6 @@ using namespace vtr::common;
 using namespace vtr::logging;
 using namespace vtr::tactic;
 using namespace vtr::testing;
-
-float getFloatFromByteArray(char *byteArray, uint index) {
-  return *((float *)(byteArray + index));
-}
-
-int64_t getStampFromPath(const std::string &path) {
-  std::vector<std::string> parts;
-  boost::split(parts, path, boost::is_any_of("/"));
-  std::string stem = parts[parts.size() - 1];
-  boost::split(parts, stem, boost::is_any_of("."));
-  int64_t time1 = std::stoll(parts[0]);
-  return time1 * 1000;
-}
-
-int64_t stringToNanoseconds(const std::string &timestamp_str) {
-  size_t dot_pos = timestamp_str.find('.');
-  std::string sec_str = timestamp_str.substr(0, dot_pos);
-  std::string frac_str = (dot_pos != std::string::npos) ? timestamp_str.substr(dot_pos + 1) : "0";
-
-  if (dot_pos == std::string::npos) {
-    switch (timestamp_str.length()) {
-      case 16: // Aeva timestamp format
-        return std::stoll(timestamp_str) * 1'000;
-      case 19: // DMU timestamp format
-        return std::stoll(timestamp_str);
-      default:
-        throw std::invalid_argument("Unexpected timestamp length: " + std::to_string(timestamp_str.length()));
-    }
-  }
-
-  // Pad fractional part to exactly 9 digits (nanoseconds)
-  while (frac_str.length() < 9) frac_str += '0';
-  if (frac_str.length() > 9) frac_str = frac_str.substr(0, 9); // truncate
-
-  int64_t seconds = std::stoll(sec_str);
-  int64_t nanos = std::stoll(frac_str);
-  return seconds * 1'000'000'000LL + nanos;
-}
-
-struct IMUMeasurement {
-  // custom to prevent precision loss
-  int64_t timestamp_ns;
-  long double angvel_x;
-  long double angvel_y;
-  long double angvel_z;
-};
-
-std::pair<int64_t, Eigen::MatrixXd> load_lidar(const std::string &path) {
-  // load Aeries II pointcloud
-  std::ifstream ifs(path, std::ios::binary);
-  std::vector<char> buffer(std::istreambuf_iterator<char>(ifs), {});
-  unsigned float_offset = 4; // float32
-  // 9 point cloud fields, use 10 because point_flags is 64 bits
-  unsigned fields = 10;  // x, y, z, radial velocity, intensity, signal quality, reflectivity, time, point_flags (beam_id, line_id, face_id)
-  unsigned point_step = float_offset * fields;
-  unsigned N = floor(buffer.size() / point_step);
-
-  std::vector<Eigen::VectorXd> points; // Vector to store valid points dynamically
-
-  const auto timestamp = getStampFromPath(path);
-  double t = double(timestamp);
-
-  for (uint i = 0; i < N; i++) {
-    int bufpos = i * point_step;
-    int offset = 0;
-
-    // Temporary variables
-    double x, y, z, radial_velocity, intensity, time_temp;
-    uint64_t point_flags;
-    int line_id, face_id;
-
-    // x, y, z
-    x = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
-    ++offset;
-    y = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
-    ++offset;
-    z = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
-
-    ++offset;
-    // Radial velocity
-    radial_velocity = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
-    ++offset;
-    // Intensity
-    intensity = getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset);
-    ++offset;
-    // Skip signal quality
-    ++offset;
-    // Skip reflectivity
-    ++offset;
-    // Timestamp
-    time_temp = (int64_t)(getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset)); // nanosec
-    time_temp += t;
-    ++offset;
-    // Point Flags (64 bit flag, only need first 32 bits)
-    point_flags = int(getFloatFromByteArray(buffer.data(), bufpos + offset * float_offset));
-
-    // Extract flags
-    line_id = ((point_flags >> 8) & 0xFF);
-    face_id = ((point_flags >> 22) & 0xF);
-
-    // Error checks
-    if (line_id < 0 || line_id >= 64) continue;
-    if (face_id < 0 || face_id > 5) continue;
-
-    Eigen::VectorXd point(8);
-    point << x, y, z, radial_velocity, intensity, time_temp, line_id, face_id;
-    points.push_back(point);
-  }
-
-  // Convert vector to Eigen::MatrixXd
-  Eigen::MatrixXd pc(points.size(), 8);
-  for (size_t k = 0; k < points.size(); ++k) {
-    pc.row(k) = points[k];
-  }
-  return std::make_pair(timestamp, pc);
-}
-
-Eigen::Matrix4d load_T_wheel_applanix(const fs::path &path, bool aligned = false) {
-  std::ifstream ifs(path / "calib" / "T_applanix_wheel.txt", std::ios::in);
-  if (!ifs.is_open()) {
-    CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_wheel.txt";
-    throw std::invalid_argument("File not found: " + (path / "calib" / "T_applanix_wheel.txt").string());
-  }
-  Eigen::Matrix4d T_applanix_wheel_mat;
-  for (size_t row = 0; row < 4; row++)
-    for (size_t col = 0; col < 4; col++) ifs >> T_applanix_wheel_mat(row, col);
-  
-
-  // This transform has y forward, x right, z up
-  Eigen::Matrix4d T_wheel_applanix = T_applanix_wheel_mat.inverse();
-
-  if (aligned) {
-    // Rotate it so that x is forward to make it more intuitive
-    Eigen::Matrix4d T_wheelfwd_wheel = Eigen::Matrix4d::Identity();
-    T_wheelfwd_wheel.block<3, 3>(0, 0) << 0, 1, 0,
-                                         -1, 0, 0,
-                                          0, 0, 1;
-    T_wheel_applanix = T_wheelfwd_wheel * T_wheel_applanix;
-  }
-
-  return T_wheel_applanix;
-}
-
-EdgeTransform load_T_robot_aeva(const fs::path &path) {
-  std::ifstream ifs1(path / "calib" / "T_applanix_lidar.txt", std::ios::in);
-  std::ifstream ifs2(path / "calib" / "T_aeva_lidar.txt", std::ios::in);
-
-  Eigen::Matrix4d T_applanix_lidar_mat;
-  for (size_t row = 0; row < 4; row++)
-    for (size_t col = 0; col < 4; col++) ifs1 >> T_applanix_lidar_mat(row, col);
-
-  Eigen::Matrix4d T_aeva_lidar_mat;
-  for (size_t row = 0; row < 4; row++)
-    for (size_t col = 0; col < 4; col++) ifs2 >> T_aeva_lidar_mat(row, col);
-
-  Eigen::Matrix4d T_applanix_aeva = T_applanix_lidar_mat * T_aeva_lidar_mat.inverse();
-  
-  // Extrinsic from lidar to rear wheel
-  // This transform has x forward, y left, z up
-  Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path, true);
-
-  EdgeTransform T_robot_aeva(Eigen::Matrix4d(T_wheel_applanix * T_applanix_aeva),   // transform
-                              Eigen::Matrix<double, 6, 6>::Zero());                 // covariance
-  return T_robot_aeva;
-}
-
-EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &imu_name) {
-  // Extrinsic from applanix to rear wheel
-  // This transform has x forward, y left, z up
-  Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path, true);
-
-  EdgeTransform T_robot_imu;
-  if (imu_name == "dmu") {
-    std::ifstream ifs1(path / "calib" / "T_applanix_dmu.txt", std::ios::in);
-    Eigen::Matrix4d T_applanix_dmu_mat;
-    if (!ifs1.is_open()) {
-      CLOG(ERROR, "boreas_wrapper") << "Could not open file: " << path / "calib" / "T_applanix_dmu.txt";
-      throw std::invalid_argument("File not found: " + (path / "calib" / "T_applanix_dmu.txt").string());
-    } else {
-      for (size_t row = 0; row < 4; row++)
-        for (size_t col = 0; col < 4; col++) ifs1 >> T_applanix_dmu_mat(row, col);
-    }
-
-    T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_wheel_applanix * T_applanix_dmu_mat),
-                                Eigen::Matrix<double, 6, 6>::Zero());
-  } else if (imu_name == "aeva") {
-    EdgeTransform T_robot_aeva = load_T_robot_aeva(path);
-
-    std::ifstream ifs(path / "calib" / "T_imu_aeva.txt", std::ios::in);
-    Eigen::Matrix4d T_imu_aeva_mat;
-    for (size_t row = 0; row < 4; row++)
-      for (size_t col = 0; col < 4; col++) ifs >> T_imu_aeva_mat(row, col);
-  
-    T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_robot_aeva.matrix() * T_imu_aeva_mat.inverse()),
-                                Eigen::Matrix<double, 6, 6>::Zero());
-  } else if (imu_name == "imu") {
-    // Extrinsic from applanix to applanix IMU
-    Eigen::Matrix4d T_imu_applanix;
-    // Rotate applanix 90 degrees about z axis and then 180 degrees about y axis
-    T_imu_applanix <<  0, -1,  0,  0,
-                      -1,  0,  0,  0,
-                       0,  0, -1,  0,
-                       0,  0,  0,  1;
-  
-    T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_wheel_applanix * T_imu_applanix.inverse()),
-                                Eigen::Matrix<double, 6, 6>::Zero());
-  } else {
-    CLOG(ERROR, "boreas_wrapper") << "Unknown IMU name: " << imu_name;
-    return EdgeTransform();
-  }
-
-  return T_robot_imu.inverse();
-}
-
-EdgeTransform load_T_wheel_robot(const fs::path &path) {
-  Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path, false);
-  Eigen::Matrix4d T_robot_applanix = load_T_wheel_applanix(path, true);
-  EdgeTransform T_wheel_robot(Eigen::Matrix4d(T_wheel_applanix * T_robot_applanix.inverse()),
-                               Eigen::Matrix<double, 6, 6>::Zero());
-  CLOG(WARNING, "boreas_wrapper") << "T_wheel_robot has been set to" << T_wheel_robot;
-  return T_wheel_robot;
-}
-
-Eigen::Matrix3d toRoll(const double &r) {
-  Eigen::Matrix3d roll;
-  roll << 1, 0, 0, 0, cos(r), sin(r), 0, -sin(r), cos(r);
-  return roll;
-}
-
-Eigen::Matrix3d toPitch(const double &p) {
-  Eigen::Matrix3d pitch;
-  pitch << cos(p), 0, -sin(p), 0, 1, 0, sin(p), 0, cos(p);
-  return pitch;
-}
-
-Eigen::Matrix3d toYaw(const double &y) {
-  Eigen::Matrix3d yaw;
-  yaw << cos(y), sin(y), 0, -sin(y), cos(y), 0, 0, 0, 1;
-  return yaw;
-}
-
-Eigen::Matrix3d rpy2rot(const double &r, const double &p, const double &y) {
-  return toRoll(r) * toPitch(p) * toYaw(y);
-}
-
-EdgeTransform load_T_enu_lidar_init(const fs::path &path, const bool &reverse) {
-  std::ifstream ifs(path / "applanix" / "aeva_poses.csv", std::ios::in);
-
-  std::string header;
-  std::getline(ifs, header);
-
-  std::string first_pose;
-  if (reverse) {
-    std::string last_pose;
-    // If reverse, we want to get last line
-    while (std::getline(ifs, last_pose)) {
-      first_pose = last_pose;
-    }
-  } else {
-    std::getline(ifs, first_pose);
-  }
-
-  std::stringstream ss{first_pose};
-  std::vector<double> gt;
-  for (std::string str; std::getline(ss, str, ',');)
-    gt.push_back(std::stod(str));
-
-  Eigen::Matrix4d T_mat = Eigen::Matrix4d::Identity();
-  T_mat.block<3, 3>(0, 0) = rpy2rot(gt[7], gt[8], gt[9]);
-  T_mat.block<3, 1>(0, 3) << gt[1], gt[2], gt[3];
-
-  EdgeTransform T(T_mat);
-  T.setZeroCovariance();
-
-  return T;
-}
-
-void load_all_imu_meas(const fs::path &imu_meas_file, std::vector<IMUMeasurement> &all_imu_meas, fs::path imu_file_name) {
-  std::ifstream imu_stream(imu_meas_file, std::ios::in);
-  // Get rid of header (GPSTime,angvel_z,angvel_y,angvel_x,accelz,accely,accelx)
-  std::string header;
-  std::getline(imu_stream, header);
-  // Loop over all imu measurements
-  std::string imu_meas;
-
-  while (std::getline(imu_stream, imu_meas)) {
-    std::stringstream ss(imu_meas);
-    std::string token;
-
-    // Load timestamp separately to preserve precision
-    std::getline(ss, token, ',');  // token = timestamp string
-    int64_t timestamp_ns = stringToNanoseconds(token);
-    // Load rest of the IMU data
-    std::vector<long double> imu;
-    while (std::getline(ss, token, ',')) {
-      imu.push_back(std::stod(token));
-    }
-
-    IMUMeasurement meas;
-    if (imu_file_name == "imu.csv" || imu_file_name == "imu_raw.csv") {
-      // [angvel_z, angvel_y, angvel_x, accelz, accely, accelx]
-      meas.timestamp_ns = static_cast<int64_t>(timestamp_ns);
-      meas.angvel_x = imu[2];
-      meas.angvel_y = imu[1];
-      meas.angvel_z = imu[0];
-    } else if (imu_file_name == "dmu_imu.csv") {
-      // [angvel_z, angvel_y, angvel_x, ..., ..., ..., ..., angvel_x, angvel_y, angvel_z]
-      meas.timestamp_ns = static_cast<int64_t>(timestamp_ns);
-      meas.angvel_x = imu[0];
-      meas.angvel_y = imu[1];
-      meas.angvel_z = imu[2];
-    } else if (imu_file_name == "aeva_imu.csv") {
-      // [angvel_x, angvel_y, angvel_z, ..., ..., ..., ..., angvel_x, angvel_y, angvel_z]
-      meas.timestamp_ns = static_cast<int64_t>(timestamp_ns);
-      meas.angvel_x = imu[0];
-      meas.angvel_y = imu[1];
-      meas.angvel_z = imu[2];
-    } else {
-      // Unknown IMU file name
-      CLOG(ERROR, "boreas_wrapper") << "Unknown IMU file name: " << imu_file_name;
-      break;
-    }
-
-    all_imu_meas.push_back(meas);
-  }
-}
-
-void load_wheel_encoder_data(const fs::path &path, const int encoder_max, std::vector<std::pair<int64_t, int64_t>> &all_wheel_meas) {
-  std::ifstream wheel_stream(path / "applanix" / "dmi.csv", std::ios::in);
-  // Get rid of header (GPSTime,pulse_count)
-  std::string header;
-  std::getline(wheel_stream, header);
-  // Loop over all wheel measurements
-  std::string curr_wheel_meas;
-  std::vector<int64_t> timestamps;
-  std::vector<int64_t> pulse_counts;
-  while (std::getline(wheel_stream, curr_wheel_meas)) {
-    std::stringstream ss(curr_wheel_meas);
-    std::string time_str, pulse_str;
-    
-    std::getline(ss, time_str, ',');
-    std::getline(ss, pulse_str, ',');
-
-    int64_t timestamp = stringToNanoseconds(time_str);
-    int64_t pulse_count = std::stoll(pulse_str);
-
-    timestamps.push_back(timestamp);
-    pulse_counts.push_back(pulse_count);
-  }
-
-  // Handle encoder wrap-around
-  int64_t offset = 0;
-  std::vector<int64_t> adjusted_counts = pulse_counts;
-  for (size_t i = 1; i < pulse_counts.size(); ++i) {
-    int64_t diff_count = std::abs(pulse_counts[i] - pulse_counts[i - 1]);
-    if (diff_count > (encoder_max / 2)) {
-      offset += encoder_max; // forward roll over
-    }
-    adjusted_counts[i] += offset;
-  }
-
-  all_wheel_meas.reserve(timestamps.size());
-  for (size_t i = 0; i < timestamps.size(); ++i) {
-    all_wheel_meas.emplace_back(std::pair(timestamps[i], adjusted_counts[i]));
-  }
-}
-
-void load_groundtruth(const fs::path &path, std::vector<lgmath::se3::Transformation> &all_gt_poses, std::vector<Eigen::Vector<double, 6>> &all_gt_vels) {
-  std::ifstream ifs(path / "applanix" / "aeva_poses.csv", std::ios::in);
-
-  // Clear header line
-  std::string line;
-  std::getline(ifs, line);
-  // Loop through all gt data
-  while (std::getline(ifs, line)) {
-    std::stringstream ss(line);
-    std::vector<double> gt;
-    for (std::string str; std::getline(ss, str, ',');)
-      gt.push_back(std::stod(str));
-
-    // Store gt pose
-    Eigen::Matrix4d T_ab_mat = Eigen::Matrix4d::Identity();
-    T_ab_mat.block<3, 3>(0, 0) = rpy2rot(gt[7], gt[8], gt[9]);
-    T_ab_mat.block<3, 1>(0, 3) << gt[1], gt[2], gt[3];
-    lgmath::se3::Transformation T_ab = lgmath::se3::Transformation(T_ab_mat);
-    all_gt_poses.push_back(T_ab.inverse());
-
-    // Store gt velocity
-    Eigen::Vector<double, 3> vbar;
-    vbar << gt[4], gt[5], gt[6];
-    vbar = T_ab_mat.block<3, 3>(0, 0).transpose() * vbar;
-    Eigen::Vector<double, 6> body_rate;
-    body_rate << vbar[0], vbar[1], vbar[2], gt[12], gt[11], gt[10];
-    all_gt_vels.push_back(-body_rate);
-  }
-}
 
 int main(int argc, char **argv) {
   // disable eigen multi-threading
@@ -558,10 +159,10 @@ int main(int argc, char **argv) {
   /// NOTE: odometry is teach, localization is repeat
   auto T_loc_odo_init = [&]() {
     const auto T_robot_aeva_odo = load_T_robot_aeva(odo_dir);
-    const auto T_enu_aeva_odo = load_T_enu_lidar_init(odo_dir, reverse);
+    const auto T_enu_aeva_odo = load_T_enu_init(odo_dir, reverse, "aeva");
 
     const auto T_robot_aeva_loc = load_T_robot_aeva(loc_dir);
-    const auto T_enu_aeva_loc = load_T_enu_lidar_init(loc_dir, false);
+    const auto T_enu_aeva_loc = load_T_enu_init(loc_dir, false, "aeva");
 
     return T_robot_aeva_loc * T_enu_aeva_loc.inverse() * T_enu_aeva_odo *
            T_robot_aeva_odo.inverse();
@@ -610,7 +211,7 @@ int main(int argc, char **argv) {
   T_lid_world_gt.reserve(files.size());
   v_lid_gt.reserve(files.size());
   if (load_gt) {
-    load_groundtruth(odo_dir, T_lid_world_gt, v_lid_gt);
+    load_lidar_groundtruth(odo_dir, T_lid_world_gt, v_lid_gt, "aeva");
     CLOG(WARNING, "boreas_wrapper") << "Loaded groundtruth for " << T_lid_world_gt.size() << " frames";
   }
 
@@ -626,6 +227,7 @@ int main(int argc, char **argv) {
   int imu_counter = 0;
   int wheel_counter = 0;
   auto it = files.begin();
+  const int64_t offset_ns = 100000000LL; 
   while (it != files.end()) {
     if (!rclcpp::ok()) break;
     rclcpp::spin_some(node);
@@ -642,7 +244,7 @@ int main(int argc, char **argv) {
       break;
     }
 
-    const auto [timestamp, points] = load_lidar(it->path().string());
+    const auto [timestamp, points] = load_aeva(it->path().string());
     CLOG(WARNING, "boreas_wrapper") << "\033[95mLoading aeva frame " << frame
                                     << " with timestamp " << timestamp << "\033[0m";
 
@@ -655,7 +257,8 @@ int main(int argc, char **argv) {
     std::vector<sensor_msgs::msg::Imu> gyro_msgs;
     if (use_imu) {
       int64_t start_timestamp = points(0, 5);
-      int64_t end_timestamp = std::min(points(points.rows() - 1, 5), double(timestamp + 100000000));
+      int64_t end_timestamp = std::min(static_cast<int64_t>(points(points.rows() - 1, 5)), 
+                                       timestamp + offset_ns);
 
       if (imu_counter == 0) {
         // Find IMU measurement right before lidar frame to initialize
@@ -666,7 +269,6 @@ int main(int argc, char **argv) {
 
       // Loop through all IMU measurements from previous one to end of current lidar frame
       // This captures IMU measurements that are between frames
-      Eigen::Matrix<double, 4, 1> imu_meas;
       while (imu_counter < all_imu_meas.size() && all_imu_meas[imu_counter].timestamp_ns < end_timestamp) {
         auto gyro_msg = sensor_msgs::msg::Imu();
         gyro_msg.angular_velocity.x = all_imu_meas[imu_counter].angvel_x;
@@ -683,7 +285,8 @@ int main(int argc, char **argv) {
     std::vector<std::pair<rclcpp::Time, double>> wheel_meas;
     if (use_wheel_encoder) {
       int64_t start_timestamp = points(0, 5);
-      int64_t end_timestamp = std::min(points(points.rows() - 1, 5), double(timestamp + 100000000));
+      int64_t end_timestamp = std::min(static_cast<int64_t>(points(points.rows() - 1, 5)), 
+                                       timestamp + offset_ns);
 
       if (wheel_counter == 0) {
         // Find wheel measurement right before lidar frame to initialize
