@@ -143,18 +143,23 @@ inline EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &i
     T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_wheel_applanix * T_applanix_dmu_mat),
                                 Eigen::Matrix<double, 6, 6>::Zero());
     } else if (imu_name == "aeva") {
-    std::ifstream ifs1(path / "calib" / "T_applanix_aeva.txt", std::ios::in);
-    Eigen::Matrix4d T_applanix_aeva_mat;
+    std::ifstream ifs1(path / "calib" / "T_applanix_lidar.txt", std::ios::in);
+    Eigen::Matrix4d T_applanix_lidar_mat;
     for (size_t row = 0; row < 4; row++)
-        for (size_t col = 0; col < 4; col++) ifs1 >> T_applanix_aeva_mat(row, col);
+        for (size_t col = 0; col < 4; col++) ifs1 >> T_applanix_lidar_mat(row, col);
 
-    std::ifstream ifs2(path / "calib" / "T_imu_aeva.txt", std::ios::in);
+    std::ifstream ifs2(path / "calib" / "T_aeva_lidar.txt", std::ios::in);
+    Eigen::Matrix4d T_aeva_lidar_mat;
+    for (size_t row = 0; row < 4; row++)
+        for (size_t col = 0; col < 4; col++) ifs2 >> T_aeva_lidar_mat(row, col);
+
+    std::ifstream ifs3(path / "calib" / "T_imu_aeva.txt", std::ios::in);
     Eigen::Matrix4d T_imu_aeva_mat;
     for (size_t row = 0; row < 4; row++)
-        for (size_t col = 0; col < 4; col++) ifs2 >> T_imu_aeva_mat(row, col);
+        for (size_t col = 0; col < 4; col++) ifs3 >> T_imu_aeva_mat(row, col);
 
-    T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_wheel_applanix * T_applanix_aeva_mat *
-                                T_imu_aeva_mat.inverse()),
+    T_robot_imu = EdgeTransform(Eigen::Matrix4d(T_wheel_applanix * T_applanix_lidar_mat *
+                                T_aeva_lidar_mat.inverse() * T_imu_aeva_mat.inverse()),
                                 Eigen::Matrix<double, 6, 6>::Zero());
     } else if (imu_name == "imu") {
     // Extrinsic from applanix to applanix IMU
