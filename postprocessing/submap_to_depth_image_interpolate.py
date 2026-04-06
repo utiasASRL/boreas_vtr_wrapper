@@ -1,6 +1,7 @@
 import numpy as np
 from pyboreas import BoreasDataset
 from pyboreas.utils.odometry import interpolate_poses 
+from pyboreas.utils.utils import get_inverse_tf
 import os
 import time
 import cv2
@@ -17,6 +18,7 @@ from vtr_utils.bag_file_parsing import Rosbag2GraphFactory
 from vtr_pose_graph.graph_iterators import TemporalIterator, PriviledgedIterator, SpatialIterator
 import vtr_pose_graph.graph_utils as g_utils
 from scipy.ndimage import gaussian_filter1d, shift
+from scipy.interpolate import interp1d
 from collections import defaultdict
 
 ################## 
@@ -95,161 +97,6 @@ def patch_angles_to_depth_image(
     return depth_img
 
 
-def angular_patch_to_depth_image_bilinear(
-    patch_r,
-    patch_az_local,
-    patch_el,
-    hfov,
-    vfov,
-    az_res_deg=0.1,
-    el_res_deg=0.1,
-    min_range=0.0,
-):
-    az_res = np.deg2rad(az_res_deg)
-    el_res = np.deg2rad(el_res_deg)
-
-    # Force odd image dimensions so there is an exact center pixel
-    W = int(np.round(hfov / az_res)) + 1
-    H = int(np.round(vfov / el_res)) + 1
-
-    assert W % 2 == 1
-    assert H % 2 == 1
-
-    u_c = (W - 1) / 2.0
-    v_c = (H - 1) / 2.0
-
-    depth_img = np.full((H, W), np.inf, dtype=np.float32)
-
-    if patch_r.size == 0:
-        depth_img[~np.isfinite(depth_img)] = 0
-        return depth_img, {
-            "W": W,
-            "H": H,
-            "u_c": u_c,
-            "v_c": v_c,
-            "az_local": np.empty((0,), dtype=np.float32),
-            "el_local": np.empty((0,), dtype=np.float32),
-            "r": np.empty((0,), dtype=np.float32),
-            "u_f": np.empty((0,), dtype=np.float32),
-            "v_f": np.empty((0,), dtype=np.float32),
-            "weight_sum": np.zeros((H, W), dtype=np.float32),
-            "depth_sum": np.zeros((H, W), dtype=np.float32),
-        }
-
-    hfov_half = hfov / 2.0
-    vfov_half = vfov / 2.0
-
-    valid = (
-        np.isfinite(patch_r)
-        & np.isfinite(patch_az_local)
-        & np.isfinite(patch_el)
-        & (patch_r > min_range)
-        & (patch_az_local >= -hfov_half)
-        & (patch_az_local <= hfov_half)
-        & (patch_el >= -vfov_half)
-        & (patch_el <= vfov_half)
-    )
-
-    if not np.any(valid):
-        depth_img[~np.isfinite(depth_img)] = 0
-        return depth_img, {
-            "W": W,
-            "H": H,
-            "u_c": u_c,
-            "v_c": v_c,
-            "az_local": np.empty((0,), dtype=np.float32),
-            "el_local": np.empty((0,), dtype=np.float32),
-            "r": np.empty((0,), dtype=np.float32),
-            "u_f": np.empty((0,), dtype=np.float32),
-            "v_f": np.empty((0,), dtype=np.float32),
-            "weight_sum": np.zeros((H, W), dtype=np.float32),
-            "depth_sum": np.zeros((H, W), dtype=np.float32),
-        }
-
-    az_local = patch_az_local[valid].astype(np.float32)
-    el_local = patch_el[valid].astype(np.float32)
-    r_local = patch_r[valid].astype(np.float32)
-
-    # Continuous pixel-center coordinates
-    # Integer pixel indices correspond to pixel centers
-    u_f = az_local / az_res + u_c
-    v_f = -el_local / el_res + v_c
-
-    # Keep only points whose bilinear neighborhood can touch the image
-    valid2 = (
-        (u_f >= -1.0) & (u_f <= W) &
-        (v_f >= -1.0) & (v_f <= H)
-    )
-
-    if not np.any(valid2):
-        depth_img[~np.isfinite(depth_img)] = 0
-        return depth_img, {
-            "W": W,
-            "H": H,
-            "u_c": u_c,
-            "v_c": v_c,
-            "az_local": np.empty((0,), dtype=np.float32),
-            "el_local": np.empty((0,), dtype=np.float32),
-            "r": np.empty((0,), dtype=np.float32),
-            "u_f": np.empty((0,), dtype=np.float32),
-            "v_f": np.empty((0,), dtype=np.float32),
-            "weight_sum": np.zeros((H, W), dtype=np.float32),
-            "depth_sum": np.zeros((H, W), dtype=np.float32),
-        }
-
-    az_local = az_local[valid2]
-    el_local = el_local[valid2]
-    r_local = r_local[valid2]
-    u_f = u_f[valid2]
-    v_f = v_f[valid2]
-
-    # Neighboring pixel centers
-    u0 = np.floor(u_f).astype(np.int32)
-    v0 = np.floor(v_f).astype(np.int32)
-    u1 = u0 + 1
-    v1 = v0 + 1
-
-    du = u_f - u0
-    dv = v_f - v0
-
-    w00 = (1.0 - du) * (1.0 - dv)  # top-left
-    w01 = du * (1.0 - dv)          # top-right
-    w10 = (1.0 - du) * dv          # bottom-left
-    w11 = du * dv                  # bottom-right
-
-    depth_sum = np.zeros((H, W), dtype=np.float32)
-    weight_sum = np.zeros((H, W), dtype=np.float32)
-
-    def splat(ui, vi, w):
-        m = (ui >= 0) & (ui < W) & (vi >= 0) & (vi < H) & (w > 0)
-        if np.any(m):
-            np.add.at(depth_sum, (vi[m], ui[m]), w[m] * r_local[m])
-            np.add.at(weight_sum, (vi[m], ui[m]), w[m])
-
-    splat(u0, v0, w00)
-    splat(u1, v0, w01)
-    splat(u0, v1, w10)
-    splat(u1, v1, w11)
-
-    valid_pix = weight_sum > 0.0
-    depth_img[valid_pix] = depth_sum[valid_pix] / weight_sum[valid_pix]
-    depth_img[~np.isfinite(depth_img)] = 0
-
-    return depth_img, {
-        "W": W,
-        "H": H,
-        "u_c": u_c,
-        "v_c": v_c,
-        "az_local": az_local,
-        "el_local": el_local,
-        "r": r_local,
-        "u_f": u_f,
-        "v_f": v_f,
-        "weight_sum": weight_sum,
-        "depth_sum": depth_sum,
-    }
-
-
 def get_submap_vertices(graph_dir):
     factory = Rosbag2GraphFactory(graph_dir)
     test_graph = factory.buildGraph()
@@ -273,13 +120,22 @@ def get_submap_vertices(graph_dir):
     return test_graph, submap_vertices
 
 
-def correct_offsets(radar_frame, seq):
+def correct_offsets(radar_frame, radar_frame_idx, seq):
+    prev_radar_frame = seq.radar_frames[radar_frame_idx - 1]
+    next_radar_frame = seq.radar_frames[radar_frame_idx + 1]
+    body_rates = [prev_radar_frame.body_rate, radar_frame.body_rate, next_radar_frame.body_rate]
+    times_us = [prev_radar_frame.timestamp_micro, radar_frame.timestamp_micro, next_radar_frame.timestamp_micro]
+
+    azimuth_timestamps = radar_frame.timestamps.flatten()
+    f = interp1d(times_us, body_rates, axis=0, kind='quadratic')
+    azimuth_body_rates = f(azimuth_timestamps) # (400, 6)
+    
     # radar_offset
     shifted_polar = shift(radar_frame.polar, shift=(0, seq.calib.radar_offset / radar_frame.resolution), order=3, mode='nearest')
 
     # Doppler Distortion
-    vx = -radar_frame.body_rate[0]
-    vy = -radar_frame.body_rate[1]
+    vx = -azimuth_body_rates[:,0] # (400, 1)
+    vy = -azimuth_body_rates[:,1] # (400, 1)
     u = vx * np.cos(radar_frame.azimuths) + vy * np.sin(radar_frame.azimuths)
     beta = seq.calib.radar_doppler_beta
     delta_r_d = beta * u
@@ -300,10 +156,10 @@ def correct_offsets(radar_frame, seq):
 def save_patches_and_labels(save_dir, patches, polar, radar_frame):
     # Input Data Directories
     input_dir = Path(save_dir + "/input")
-    array_save_dir = input_dir / "patch_arrays_5_deg_no_interp" # 32 bit array (more precision)
+    array_save_dir = input_dir / "patch_arrays_2_deg_no_interp" # 32 bit array (more precision)
     
     # Polar Label Directories
-    labels_dir = Path(save_dir + "/shifted_labels")
+    labels_dir = Path(save_dir + "/labels")
 
     array_save_dir.mkdir(parents=True, exist_ok=True)
     labels_dir.mkdir(parents=True, exist_ok=True)
@@ -384,9 +240,7 @@ for seq in bd.sequences:
     while (submap_vertices_idx < len(submap_vertices) - 1 and lidar_frame_idx < len(seq.lidar_frames) and radar_frame_idx < radar_end_frame + 1):
         curr_submap = submap_vertices[submap_vertices_idx]
         next_submap = submap_vertices[submap_vertices_idx + 1]
-        prev_radar_frame = seq.radar_frames[radar_frame_idx - 1]
         radar_frame = seq.radar_frames[radar_frame_idx]
-        next_radar_frame = seq.radar_frames[radar_frame_idx + 1]
         lidar_frame = seq.lidar_frames[lidar_frame_idx]
 
         if int(radar_frame.frame) < curr_submap.stamp // 1000: # submap timestamps are in ns (radar/lidar in micro s)
@@ -403,10 +257,10 @@ for seq in bd.sequences:
 
         # Get radar frame poses for each azimuth
         radar_frame = seq.get_radar(radar_frame_idx)
-        poses = [prev_radar_frame.pose, radar_frame.pose, next_radar_frame.pose] # poses are T_enu_radar
-        times = [prev_radar_frame.timestamp_micro, radar_frame.timestamp_micro, next_radar_frame.timestamp_micro]
+        poses = [get_inverse_tf(rad_frame.pose) for rad_frame in seq.radar_frames[radar_frame_idx - 1: radar_frame_idx + 2]] # rad_frame.pose is T_enu_radar but interpolate_poses needs T_radar_enu!
+        times = [rad_frame.timestamp_micro for rad_frame in seq.radar_frames[radar_frame_idx - 1: radar_frame_idx + 2]]
         query_times = radar_frame.timestamps.flatten().tolist()
-        azimuth_poses = interpolate_poses(poses, times, query_times)
+        azimuth_poses = interpolate_poses(poses, times, query_times) # T_radar_enu
         azimuth_transform_poses = [Transformation(T_ba=pose) for pose in azimuth_poses]
         
         # Get submap in lidar frame
@@ -420,7 +274,7 @@ for seq in bd.sequences:
 
         t0 = time.perf_counter()
         # naively get map points in each azimuth pose
-        map_pts_all = [convert_points_to_frame(map_pts_enu, T_azi.inverse()) for T_azi in azimuth_transform_poses]
+        map_pts_all = [convert_points_to_frame(map_pts_enu, T_azi) for T_azi in azimuth_transform_poses]
 
         # convert to spherical
         pts = np.stack(map_pts_all, axis=0) # (400, 3, N)
@@ -434,8 +288,8 @@ for seq in bd.sequences:
         el = np.arctan2(z, xy)
 
         # extract small patch of each point cloud
-        hfov = np.deg2rad(5.0)
-        vfov = np.deg2rad(5.0)
+        hfov = np.deg2rad(2.0)
+        vfov = np.deg2rad(2.0)
         hfov_half = hfov / 2.0
         vfov_half = vfov / 2.0
         daz = wrap_to_pi(az - radar_frame.azimuths) # radar_frame.azimuths shape (400, 1); ranges from [-pi, pi]
@@ -452,17 +306,6 @@ for seq in bd.sequences:
         depth_patches = []
         
         for i in range(len(patch_r_all)):
-            # depth_img, meta = angular_patch_to_depth_image_bilinear(
-            #     patch_r=patch_r_all[i],
-            #     patch_az_local=patch_az_local_all[i],
-            #     patch_el=patch_el_all[i],
-            #     hfov=hfov,
-            #     vfov=vfov,
-            #     az_res_deg=az_res_deg,
-            #     el_res_deg=el_res_deg,
-            #     min_range=0.0,
-            # )
-
             depth_img = patch_angles_to_depth_image(
                 az_local=patch_az_local_all[i],
                 el_local=patch_el_all[i],
@@ -491,11 +334,11 @@ for seq in bd.sequences:
             # elevation = np.arcsin(z_points / r_vals)
 
             # valid_mask = (
-            #     (np.abs(elevation) <= np.deg2rad(2)) &
-            #     (np.abs(azimuth - np.deg2rad(-110.63574)) <= np.deg2rad(2))
+            #     (np.abs(elevation) <= np.deg2rad(30)) & 
+            #     (x_points > 0)
             # )
 
-            # if map_pts.shape[0] == 0 or i != 277:
+            # if map_pts.shape[0] == 0 or i % 100 != 0:
             #     print(f"Skipping azimuth {i}")
             #     continue
 
@@ -539,17 +382,23 @@ for seq in bd.sequences:
             #     paused = True
             #     vis.add_geometry(pcd)
             #     # Look along the Z-axis (into the page)
-            #     view_ctl.set_front([0, 0, -1]) 
-            #     # Point the X-axis UP
-            #     view_ctl.set_up([1, 0, 0])     
+            #     # view_ctl.set_front([0, 0, -1]) 
+            #     # # Point the X-axis UP
+            #     # view_ctl.set_up([1, 0, 0])   
+
+            #     view_ctl.set_front([-1, 0, 0])
+            #     view_ctl.set_up([0, 0, -1])  
             #     # Center on the origin
             #     view_ctl.set_lookat(origin)
             # else:
             #     vis.update_geometry(pcd)
             #     # Look along the Z-axis (into the page)
-            #     view_ctl.set_front([0, 0, -1]) 
-            #     # Point the X-axis UP
-            #     view_ctl.set_up([1, 0, 0])     
+            #     # view_ctl.set_front([0, 0, -1]) 
+            #     # # Point the X-axis UP
+            #     # view_ctl.set_up([1, 0, 0])   
+
+            #     view_ctl.set_front([-1, 0, -1])
+            #     view_ctl.set_up([0, 0, -1]) 
             #     # Center on the origin
             #     view_ctl.set_lookat(origin)
             # t = time.time()
@@ -557,13 +406,15 @@ for seq in bd.sequences:
             #     vis.poll_events()
             #     vis.update_renderer()
 
+
         patches = np.stack(depth_patches).astype(np.float32)
-        shifted_polar = correct_offsets(radar_frame, seq)
+        shifted_polar = correct_offsets(radar_frame, radar_frame_idx, seq)
+        t1 = time.perf_counter()
 
         save_patches_and_labels(seq.seq_root, patches, shifted_polar, radar_frame.frame)
 
-        t1 = time.perf_counter()
-        print(f"Elapsed time: {t1 - t0:.6f} s")
+        t2 = time.perf_counter()
+        print(f"Elapsed time: {t2 - t0:.6f} s (without save is {t1 - t0:.6f} s)")
 
         map_pts = map_pts_all[199]
 
