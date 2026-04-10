@@ -5,6 +5,7 @@ touch venv/COLCON_IGNORE
 source venv/bin/activate
 
 pip install -r $ROOTDIR/requirements.txt
+pip install -e "$ROOTDIR/external/vtr3_pose_graph"
 deactivate
 
 cd $ROOTDIR

@@ -152,6 +152,56 @@ def correct_offsets(radar_frame, radar_frame_idx, seq):
 
     return shifted_polar
 
+def cen_filter_2d(polar_image, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5):
+    """
+    Vectorized Cen filter for an entire radar polar image.
+    Expects a 2D numpy array of shape (num_azimuths, num_range_bins).
+    
+    Args:
+        polar_image: 2D array of raw radar power returns.
+        sigma_gauss: Controls the width of the Gaussian smoothing.
+        z_q: Threshold multiplier for zeroing out noise.
+        noise_scale: Multiplier to artificially scale the estimated noise floor.
+    """
+    # 1. Subtract mean per azimuth
+    mean_val = np.mean(polar_image, axis=1, keepdims=True)
+    q = polar_image - mean_val
+    
+    # 2. Apply Gaussian filter across the range bins
+    p = gaussian_filter1d(q, sigma=sigma_gauss, axis=1, mode='reflect')
+    
+    # 3. Estimate TRUE noise sigma per azimuth
+    neg_mask = q < 0
+    count = np.sum(neg_mask, axis=1, keepdims=True)
+    
+    q_neg_sq = (q * neg_mask) ** 2
+    sum_q_neg_sq = np.sum(q_neg_sq, axis=1, keepdims=True)
+    
+    sigma_q_sq = np.divide(2.0 * sum_q_neg_sq, count, out=np.zeros_like(count, dtype=float), where=count!=0)
+    
+    # --- THE MAGIC FACTOR IS APPLIED HERE ---
+    sigma_q = noise_scale * np.sqrt(sigma_q_sq)
+    
+    # Fallback for any rows that had exactly 0 negative values
+    sigma_q[count == 0] = 0.034
+    
+    threshold = z_q * sigma_q 
+    
+    # 4. Compute adaptive weighting
+    eps = 1e-8
+    pow_p = (p / (sigma_q + eps)) ** 2
+    pow_qp = ((q - p) / (sigma_q + eps)) ** 2
+    
+    npp = np.exp(-0.5 * pow_p)
+    nqp = np.exp(-0.5 * pow_qp)
+    
+    # Re-weight the signal
+    y = q * (1.0 - nqp) + p * (nqp - npp)
+    
+    # 5. Zero out signal values less than threshold
+    y[y <= threshold] = 0.0
+    
+    return y
 
 def save_patches_and_labels(save_dir, patches, polar, radar_frame):
     # Input Data Directories
@@ -409,9 +459,10 @@ for seq in bd.sequences:
 
         patches = np.stack(depth_patches).astype(np.float32)
         shifted_polar = correct_offsets(radar_frame, radar_frame_idx, seq)
+        filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)
         t1 = time.perf_counter()
 
-        save_patches_and_labels(seq.seq_root, patches, shifted_polar, radar_frame.frame)
+        save_patches_and_labels(seq.seq_root, patches, filtered_polar, radar_frame.frame)
 
         t2 = time.perf_counter()
         print(f"Elapsed time: {t2 - t0:.6f} s (without save is {t1 - t0:.6f} s)")

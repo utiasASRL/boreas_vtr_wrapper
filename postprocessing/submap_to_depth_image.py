@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from sensor_msgs_py.point_cloud2 import read_points
 import open3d as o3d
 from pylgmath import Transformation
-from vtr_utils.plot_utils import convert_points_to_frame, extract_points_from_vertex, extract_points_from_vertex
+from vtr_utils.plot_utils import convert_points_to_frame, extract_points_from_vertex
 import argparse
 
 from vtr_utils.bag_file_parsing import Rosbag2GraphFactory
@@ -295,9 +295,9 @@ def toggle(vis):
 vis = o3d.visualization.VisualizerWithKeyCallback()
 vis.register_key_callback(ord(' '), toggle)
 vis.create_window()
-origin = np.array([0, 0, 0])
-# frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=5.0, origin=origin)
-# vis.add_geometry(frame)
+origin = np.array([0, 0, 2.42])
+frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=5.0, origin=origin)
+vis.add_geometry(frame)
 view_ctl = vis.get_view_control()
 
 pcd = o3d.geometry.PointCloud()
@@ -370,12 +370,13 @@ boreas_data = os.getenv("VTRRDATA") # TODO change to use environment variable
 bd = BoreasDataset(boreas_data)
 
 radar_start_frame = 65
-radar_end_frame = 200
+radar_end_frame = 1000
 radar_start_ts = None
 radar_end_ts = None
 
 # Loop through each frame in order (odometry)
 for seq in bd.sequences:
+    seq = bd.sequences[1]
     print(f"SequenceID: {seq.ID}")
 
     # get radar start and end times
@@ -424,7 +425,11 @@ for seq in bd.sequences:
             continue
         
         # Get submap in lidar frame
-        map_pts = extract_points_from_vertex(curr_submap, msg="pointmap")
+        map_pts, intensities = extract_points_from_vertex(curr_submap, msg="pointmap")
+        print("-" * 10)
+        print(f"map pts shape: {map_pts.shape}")
+        print(f"intensities shape: {intensities.shape}, Max: {np.max(intensities)}, Min: {np.min(intensities)}")
+        print("-" * 10)
         map_pts = convert_points_to_frame(map_pts, T_lidar_robot)
 
         # Get submap in current radar frame (lidar --> ENU --> radar)
@@ -441,30 +446,30 @@ for seq in bd.sequences:
         azimuth = np.arctan2(y_points, x_points)
         elevation = np.arcsin(z_points / r_vals)
 
-        # valid_mask = (
-        #     (np.abs(elevation) <= np.deg2rad(7.5)) 
-        #     # (np.abs(azimuth - np.deg2rad(-110.63574)) <= np.deg2rad(1))
-        # )
+        valid_mask = (
+            (np.abs(elevation) <= np.deg2rad(5)) 
+            # (np.abs(azimuth - np.deg2rad(-110.63574)) <= np.deg2rad(1))
+        )
 
-        # map_pts = map_pts[:, valid_mask]
+        map_pts = map_pts[:, valid_mask]
+        intensities = intensities[valid_mask]
         
         # plot point cloud
         pcd.points = o3d.utility.Vector3dVector(map_pts.T)
 
-        z = map_pts[2, :]  # height
-        z_min = np.min(z)
-        z_max = np.max(z)
+        i_min = np.min(intensities)
+        i_max = np.max(intensities)
 
         # avoid divide-by-zero if all points have same height
-        if z_max > z_min:
-            z_norm = (z - z_min) / (z_max - z_min)
-            z_norm = np.power(z_norm, 2.0)
+        if i_max > i_min:
+            i_norm = (intensities - i_min) / (i_max - i_min)
+            # i_norm = np.power(i_norm, 2.0)
         else:
-            z_norm = np.zeros_like(z)
+            i_norm = np.zeros_like(intensities)
 
         # use matplotlib colormap
-        cmap = plt.get_cmap("jet")   # or "viridis", "jet"
-        colors = cmap(z_norm)[:, :3]   # drop alpha channel
+        cmap = plt.get_cmap("turbo")   # or "viridis", "jet"
+        colors = cmap(i_norm)[:, :3]   # drop alpha channel
         pcd.colors = o3d.utility.Vector3dVector(colors)
 
         # Save depth images
@@ -486,20 +491,17 @@ for seq in bd.sequences:
         radar_frame.unload_data()
 
         # For video playing in Open3D
-        if radar_frame.frame == "1733248498796982":
-            paused = True
-
         if first:
             first = False
             paused = True
             vis.add_geometry(pcd)
 
             # # Look along the Z-axis (into the page)
-            # view_ctl.set_front([0, 0, -1]) 
+            view_ctl.set_front([0, 0, -1]) 
             # # Point the X-axis UP
             # view_ctl.set_up([1, 0, 0])     
 
-            view_ctl.set_front([-3, 0, -1]) 
+            # view_ctl.set_front([-3, 0, -1]) 
 
             # Keep the Z-axis (or whichever is your vertical) pointing UP
             view_ctl.set_up([1, 0, 0])
@@ -514,19 +516,19 @@ for seq in bd.sequences:
             # # Point the X-axis UP
             # view_ctl.set_up([1, 0, 0])   
 
-            view_ctl.set_front([-3, 0, -1]) 
-            view_ctl.set_up([1, 0, 0])
+            # view_ctl.set_front([-3, 0, -1]) 
+            # view_ctl.set_up([1, 0, 0])
             # Center on the origin
-            view_ctl.set_lookat(origin)
+            # view_ctl.set_lookat(origin)
         
         # --- INSERT CAPTURE CODE HERE ---
         # 1. Force the GPU to draw the new geometry and camera angle
-        vis.poll_events()
-        vis.update_renderer()
+        # vis.poll_events()
+        # vis.update_renderer()
 
-        # 2. Save the image
-        image_name = f"angled_lidar_images/{radar_frame.frame}.png"
-        vis.capture_screen_image(image_name, do_render=True)
+        # # 2. Save the image
+        # image_name = f"angled_lidar_images/{radar_frame.frame}.png"
+        # vis.capture_screen_image(image_name, do_render=True)
         # --------------------------------
         
         t = time.time()

@@ -25,7 +25,7 @@ This will either attach to a boreas_vtr_wrapper container that's already running
 bash scripts/run_docker.sh
 ```
 
-FYI: This will always run `entrypoint.sh` which tries to source the python venv (see below). Also, the container expects Boreas sequences to be stored at `$VTRRDATA`. If your data is not stored here, then consider mounting a volume in the shell script like `-v host_path:container_path:ro`
+FYI: This will always run `entrypoint.sh` which tries to source the python venv (see below). Also, the container expects Boreas sequences to be stored at `$VTRRDATA`. If your data is not stored here, then consider mounting a volume in the shell script like `-v host_path:container_path:ro`. In `setup_container.sh`, point `$VTRRESULT` and `$VTRRDATA` to where you want to store results and data.
 
 ## Build and Install VT&R3 + boreas_vtr_wrapper
 
@@ -47,170 +47,93 @@ bash scripts/create_venv.sh
 
 # Running Experiments
 
-## Visualization (Work in Progress)
+## Visualization
 
+### RVIZ
 First launch RVIZ for visualization:
 
 ```Bash
-source /opt/ros/galactic/setup.bash               # source the ROS environment
+source /opt/ros/humble/setup.bash               # source the ROS environment
 ros2 run rviz2 rviz2 -d ${VTRSRC}/rviz/radar.rviz # launch rviz
 ```
 
 Then in another terminal, launch `rqt_reconfigure` for control. Currently supported dynamic reconfigure parameters: `control_test.play` and `control_test.delay_millisec`
 
 ```Bash
-source /opt/ros/galactic/setup.bash
+source /opt/ros/humble/setup.bash
 ros2 run rqt_reconfigure rqt_reconfigure
 ```
 
-## Odometry (Teach) and Localization (Repeat)
+### Foxglove
+An alternative visualization approach is to use [Foxglove](https://foxglove.dev). This approach has the advantage of being able to locally visualize ROS topics even in cases where the code is running on a remote machine. For convinience, the Foxglove WebSocket is already installed as part of the standard Dockerfile. This allows you to connect to the remote machine using the web browser or by downloading the [Foxglove Studio](https://foxglove.dev/download), as long as your local machine can reach the remote machine in some manner. 
 
+To use the WebSocket, open another terminal window inside of a set up Docker container and run
 ```Bash
-export VTRRROOT=${VTRROOT}/boreas_vtr_wrapper # location of this repository CHANGE THIS!
-export VTRRDATA=${VTRDATA}/boreas/sequences  # dataset location (where the boreas-xxxxx folders at) CHANGE THIS!
-export VTRRRESULT=${VTRTEMP}/radar/boreas    # default result location
-mkdir -p ${VTRRRESULT}
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765
 ```
 
+Then, either [in the browser](https://studio.foxglove.dev) or in the Foxglove Studio application, navigate to `Open Connection -> Foxglove WebSocket` and enter `ws://REMOTE_IP:8765`, where `REMOTE_IP` is the ping-able IP address of your remote machine. Afterwards, all remote machine ROS topics should be visualizable using the Foxglove interface (once a test is running). The browser will sometimes take a long time to load, so the application is generally recommended. Additional information about using Foxglove WebSocket can be found at https://github.com/foxglove/ros-foxglove-bridge/.
+
+## Odometry (Teach) and Localization (Repeat)
+
+The general form of running and evaluating a test inside the Docker container is
 ```Bash
-source ${VTRRROOT}/src/install/setup.bash
+bash runtime/run_test.sh ${MODE} ${SENSOR} ${SEQUENCES}
+bash runtime/run_eval.sh ${MODE} ${SENSOR} ${SEQUENCES}
+```
+where `MODE = [odometry, localization]`, `SENSOR = [radar, lidar, radar_lidar]`, and `SEQUENCES` is either one (for odometry) or two (for localization) Boreas sequence names. Consider the examples below for radar.
+
+Consider, as an example, the following sequences for odometry and localization.
+```Bash
 # Choose a Teach (ODO_INPUT) and Repeat (LOC_INPUT) run from boreas dataset
 ODO_INPUT=boreas-2020-11-26-13-58
 LOC_INPUT=boreas-2021-01-26-10-59
 ```
+Note, it is not required to define these variables, as you can input the sequence name as an argument directly. If it is desired to do a localization test, it is first required that an odometry result is generated for the sequence against which a localization attempt is desired.
 
-Odometry:
+Run and evaluate a single radar odometry test using
 ```Bash
-bash ${VTRRROOT}/src/vtr_testing_radar/script/test_odometry.sh ${ODO_INPUT}
-bash ${VTRRROOT}/src/vtr_testing_radar/script/test_odometry_eval.sh ${ODO_INPUT}
+bash runtime/run_test.sh odometry radar ${ODO_INPUT}
+bash runtime/run_eval.sh odometry radar ${ODO_INPUT}
 ```
 
-Localization:
+Run and evaluate a single radar localization test using
 ```Bash
-bash ${VTRRROOT}/src/vtr_testing_radar/script/test_localization.sh ${ODO_INPUT} ${LOC_INPUT}
-# Evaluation:
-bash ${VTRRROOT}/src/vtr_testing_radar/script/test_localization_eval.sh ${ODO_INPUT}
+bash runtime/run_test.sh localization radar ${ODO_INPUT} ${LOC_INPUT}
+bash runtime/run_eval.sh localization radar ${ODO_INPUT}
 ```
 
+Note, that the evaluation scripts both only take in an odometry sequence. This is because the output of a localization run against a map constructed from an odometry sequence is stored under the odometry sequence result subfolder. The evaluation script evaluates all localization sequences contained within the odometry sequence subfolder at the same time. `runtime/config` contains the config files corresponding to the `SENSOR` used in Teach and Repeat. Note that for radar localization against lidar submaps, use lidar for the Teach phase and radar_lidar for the Repeat phase. A copy of the `.yaml` config file will also be saved in `results` for each pipeline run. When debugging, increase threads in the `.yaml` file for faster pipeline runs (will result in slight changes in results) but use single thread for best results.
 
 ## Running Experiments in Parallel
 
-Assuming you want to run odometry or localization for all test sequences in parallel.
+Assuming you want to run odometry or localization for multiple test sequences in parallel, it is possible to do so by running
 
-Inside the `script` folder of all three testing packages (`vtr_testing_<...>`), you can find the following two bash script:
-
-- `parallel_test_odometry.sh`
-- `parallel_test_localization.sh`
-
-
-All you need to do is run one of the above bash scripts **inside the contaner**. 
-
+The general form of running and evaluating tests on multiple sequences in parallel is
+```Bash
+bash runtime/run_parallel_test.sh ${MODE} ${SENSOR}
 ```
-bash <path to parallel_test_odometry.sh or parallel_test_localization.sh>
-```
+where `MODE = [odometry, localization]`, `SENSOR = [radar, lidar, radar_lidar]`. This script runs all tests, either odometry or localization, and evaluates them afterwards. Note, SEQUENCES are not provided as an input for this script, as the specific list of sequences desired to be tested in parallel must be set inside of the script file. Consider the examples below for radar localization.
 
-For example,
-
+```Bash
+bash runtime/run_parallel_test.sh localization radar
 ```
-bash ${VTRRROOT}/src/vtr_testing_radar/script/parallel_test_localization.sh
-```
+Note, running this script assumes that the REFERENCE sequence, set inside of run_parallel_test.sh, has an already completed odometry test.
 
-Then monitor progress by going to the log file of each test.
+You can monitor the progress of each test by going to the log file of each test.
 
 The log file should be located at
 
-`~/ASRL/temp/[radar, lidar, radar_lidar]/boreas/<boreas-2020-11-26-13-58>/<boreas-2020-11-26-13-58>/<some name based on time>.log`
+`${VTRRESULT}/${SENSOR}/${ODO_INPUT}/${ODO_INPUT}/<some name based on time>.log`
 
-Understand what these scripts do:
+for odometry and at
 
-Using `parallel_test_odometry.sh` from `src/vtr_testing_radar/script` as an example, the script does the following:
+`${VTRRESULT}/${SENSOR}/${ODO_INPUT}/${LOC_INPUT}/<some name based on time>.log`
 
-1. Define sequences we need to run for odometry
+for localization, where `${VTRRESULT}` is set in `setup_container.sh`. After the evaluation of the tests is complete, you should see the output in the terminal. Various other results can be found in the `${VTRRESULT}` directory.
 
-```
-# odometry sequences
-SEQUENCES=(
-  'boreas-2020-11-26-13-58'  # Note this is the localization reference run, you must run this in order to run localization tests
-  'boreas-2020-12-04-14-00'
-  'boreas-2021-01-26-10-59'
-  'boreas-2021-02-09-12-55'
-  'boreas-2021-03-09-14-23'
-  'boreas-2021-04-22-15-00'
-  'boreas-2021-06-29-18-53'
-  'boreas-2021-06-29-20-43'
-  'boreas-2021-09-08-21-00'
-)
-```
+## Plotting Submaps
 
-2. Set max number of sequences to run in parallel
-
-```
-# maximum number of jobs running in parallel
-GROUPSIZE=20
-```
-
-3. Setup up directories
-
-These directories are defined using the environment variables in `Setup VTR3 Directories` section.
-
-I suggest you don't change them.
-
-For `VTRRDATA`, it is supposed to be the directory that contains all boreas sequences (i.e. `boreas-....`). You can create a symlink from boreas dataset on /nas to this directory.
-
-```
-# define the following environment variables VTRR=VTR RaDAR
-export VTRRROOT=${VTRROOT}/boreas_vtr_wrapper # location of this repository CHANGE THIS!
-export VTRRDATA=${VTRDATA}/boreas/sequences  # dataset location (where the boreas-xxxxx folders at) CHANGE THIS!
-export VTRRRESULT=${VTRTEMP}/radar/boreas    # result location MAYBE CHANGE THIS!
-mkdir -p ${VTRRRESULT}
-```
-
-4. Define path to test scripts
-
-```
-ODOMETRY_SCRIPT="${VTRRROOT}/src/vtr_testing_radar/script/test_odometry.sh"
-ODOMETRY_EVAL_SCRIPT="${VTRRROOT}/src/vtr_testing_radar/script/test_odometry_eval.sh"
-```
-
-These are bash scripts that will run odometry test (using `ros2 run ...`) and evaluation.
-
-5. Run odometry tests in parallel
-
-The following code runs at most `GROUPSIZE` odometry tests in parallel by calling the `$ODOMETRY_SCRIPT` test script with each of the sequence specified in `SEQUENCES`.
-
-```
-declare -A pids
-for seq in ${SEQUENCES[@]}; do
-  echo "Executing command: bash $ODOMETRY_SCRIPT $seq &>/dev/null &"
-  ### command to execute
-  bash $ODOMETRY_SCRIPT $seq &>/dev/null &
-  ###
-  pids[${seq}]=$!
-  # wait for all pids to finish if reached group size
-  if [[ ${#pids[@]} -ge ${GROUPSIZE} ]]; then
-    for key in ${!pids[@]}; do
-      wait ${pids[${key}]}
-      echo "Process ${key} finished with return code ${?}"
-      unset pids[${key}]
-    done
-  fi
-done
-for key in ${!pids[@]}; do
-  wait ${pids[${key}]}
-  echo "Process ${key} finished with return code ${?}"
-  unset pids[${key}]
-done
-```
-
-6. Run evaluation
-
-When all sequences are finished, the following code runs pyboreas odometry evaluation on the result of each sequence. You should see output in terminal.
-
-```
-for seq in ${SEQUENCES[@]}; do
-  echo "Executing command: bash $ODOMETRY_EVAL_SCRIPT $seq"
-  bash $ODOMETRY_EVAL_SCRIPT $seq
-done
-```
+`external/vtr3_python` contains a script `plot_submaps.py` which can be used to plot the lidar or radar submaps from Teach pass. 
 
 ## [License](./LICENSE)

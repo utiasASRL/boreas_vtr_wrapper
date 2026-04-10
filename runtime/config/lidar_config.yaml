@@ -13,13 +13,13 @@
         # "tactic.module.live_mem_manager",
         # "tactic.module.graph_mem_manager",
         # pipeline specific
-        # "lidar.pipeline",
-        # "lidar.velodyne_converter",
-        # "lidar.preprocessing",
+          # "lidar.pipeline",
+          # "lidar.velodyne_converter",
+          # "lidar.preprocessing",
         # "lidar.odometry_gt",
         "lidar.odometry_icp",
         # "lidar.odometry_wheel",
-        # "lidar.odometry_map_maintenance",
+        "lidar.odometry_map_maintenance",
         # "lidar.vertex_test",
         # "lidar.localization_map_recall",
         # "lidar.localization_icp",
@@ -28,7 +28,7 @@
 
     ############ Boreas data configuration ############
     boreas:
-      load_gt: false
+      load_gt: true
       imu:
         use_imu: true
         imu_name: "dmu" # options are "dmu", "aeva", or "imu" (for applanix imu)
@@ -61,7 +61,7 @@
       save_odometry_result: true
       save_localization_result: true
       save_odometry_vel_result: true
-      visualize: false
+      visualize: true
 
       rviz_loc_path_offset: [0., 0., 0.]
 
@@ -77,8 +77,8 @@
 
       odometry: [
           # odometry and mapping thread modules
-          "icp",
-          # "gt",
+          # "icp",
+          "gt",
           # "wheel",
           "mapping",
           "vertex_test",
@@ -104,14 +104,14 @@
         fov_center: 45.0
         fov: 60.0
 
-        visualize: false
+        visualize: true
 
       filtering:
         type: lidar.preprocessing
 
         num_threads: 1
 
-        crop_range: 80.0
+        crop_range: 250.0
         frame_voxel_size: 1.0 # grid subsampling voxel size
 
         vertical_angle_res: 0.0017453292519943296 # vertical angle resolution in radius (0.1 in degree)
@@ -129,7 +129,7 @@
 
         cluster_num_sample: 10000 # maxnumber of sample after removing isolated points
 
-        visualize: false
+        visualize: true
 
     odometry:
       gt:
@@ -167,7 +167,7 @@
         max_trans_diff: 1000.0
         max_trans_vel_diff: 1000.0
 
-        visualize: false
+        visualize: true
 
       wheel:
         type: lidar.odometry_wheel
@@ -182,7 +182,7 @@
         # wheel_parameter: 0.00052229 
         wheel_parameter: 0.00052201
 
-        visualize: false
+        visualize: true
 
       mapping:
         type: lidar.odometry_map_maintenance_v2
@@ -213,7 +213,7 @@
 
         map_version: "pointmap"
 
-        visualize: false
+        visualize: true
 
       icp:
         type: lidar.localization_icp
