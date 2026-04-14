@@ -18,7 +18,7 @@ mkdir -p ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}
 cp ${PARAM_FILE} ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}/radar_preprocessing_config.yaml
 
 # Source the VTR environment with the testing package
-source ${VTRRROOT}/install/setup.bash
+source ${VTRRROOT}/src/install/setup.bash
 # --prefix 'gdb -ex run --args'
 ros2 run vtr_testing_radar vtr_testing_radar_boreas_preprocessing \
   --ros-args -p use_sim_time:=true \

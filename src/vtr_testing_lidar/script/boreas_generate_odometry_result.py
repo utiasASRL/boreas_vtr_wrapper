@@ -72,35 +72,24 @@ def main(dataset_dir, result_dir, velocity):
     print("Data directory does not exist:", data_dir)
     return
   print("Looking at result data directory:", data_dir)
-
-  T_applanix_lidar = dataset_odo.sequences[0].calib.T_applanix_lidar
-  T_robot_applanix = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
   
-  T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
-                            [-0.99955003, 0.0299955, 0., 0.0],
-                            [ 0, 0, 1, 1.45],
-                            [ 0, 0, 0, 1]])
+  T_applanix_wheel_file = os.path.join(dataset_dir, odo_input_seq, "calib/T_applanix_wheel.txt")
+  if not os.path.exists(T_applanix_wheel_file):
+    print("File does not exist:", T_applanix_wheel_file, ". Loading default.")
+    T_applanix_wheel = np.array([[0.999560,  0.029665, 0.000000, -0.813993],
+                                [-0.029665, 0.999560, 0.000000, -0.455312],
+                                [0.000000, 0.000000, 1.000000, -1.610000],
+                                [0.000000, 0.000000, 0.000000, 1.000000]])
+  else:
+    T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
+  T_wheel_applanix = get_inverse_tf(T_applanix_wheel)
 
-  T_robot_applanix = T_axel_applanix
+  T_wheelfwd_wheel = np.array([[0, 1, 0, 0],
+                              [-1, 0, 0, 0],
+                              [0, 0, 1, 0],
+                              [0, 0, 0, 1]])
 
-  # TODO: robot frame should be at rear-axle of the vehicle, update this!
-  # ## old way of getting robot applanix
-  #T_radar_lidar = dataset_odo.sequences[0].calib.T_radar_lidar
-  #T_applanix_radar = T_applanix_lidar @ get_inverse_tf(T_radar_lidar)
-  #T_robot_applanix = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-  #T_robot_radar = T_robot_applanix @ T_applanix_radar
-
-  ## new way of getting robot applanix
-  #T_radar_lidar = dataset_odo.sequences[0].calib.T_radar_lidar
-  #T_radar_robot = np.array([[1, 0, 0, -0.26], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-  #T_robot_lidar = get_inverse_tf(T_radar_robot) @ T_radar_lidar
-  # T_robot_lidar: [[ 0.68297386  0.73044281  0.          0.26      ]
-  #                 [-0.73044281  0.68297386  0.          0.        ]
-  #                 [ 0.          0.          1.         -0.21      ]
-  #                 [ 0.          0.          0.          1.        ]]
-
-  #print("T_robot_lidar should be:\n", T_robot_lidar)
-  #T_robot_applanix = T_robot_lidar @ get_inverse_tf(T_applanix_lidar)
+  T_robot_applanix = T_wheelfwd_wheel @ T_wheel_applanix
   
   # get bag file
   bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "odometry_result")
@@ -145,12 +134,11 @@ def main(dataset_dir, result_dir, velocity):
       w_v_r_robot[4] = message[1].angular.y
       w_v_r_robot[5] = message[1].angular.z
 
-      w_r_v_radar = np.zeros((6))
-      w_r_v_radar[:3] = (- w_v_r_robot[:3].reshape(1, 3) @ T_robot_applanix[:3, :3]).flatten()
-      w_r_v_radar[3:] = (- w_v_r_robot[3:].reshape(1, 3) @ T_robot_applanix[:3, :3]).flatten()
+      # Transform velocity from robot to applanix frame/origin (lidar results are in applanix frame)
+      w_a_v_applanix = - se3op.tranAd(get_inverse_tf(T_robot_applanix)) @ w_v_r_robot.reshape(6, 1)
 
       timestamp = int(int(message[0]) / 1000)
-      vel_results.append([timestamp] + w_r_v_radar.flatten().tolist())
+      vel_results.append([timestamp] + w_a_v_applanix.flatten().tolist())
 
     output_dir = osp.join(result_dir, "odometry_vel_result")
     os.makedirs(output_dir, exist_ok=True)

@@ -50,12 +50,13 @@ class BagFileParser():
     return [(timestamp, deserialize_message(data, self.topic_msg_message[topic_name])) for timestamp, data in rows]
 
 
-def main(dataset_dir, result_dir, velocity):
+def main(dataset_dir, result_dir, velocity, quiet=False):
   result_dir = osp.normpath(result_dir)
   odo_input = osp.basename(result_dir)
-  print("Result Directory:", result_dir)
-  print("Odometry Run:", odo_input)
-  print("Dataset Directory:", dataset_dir)
+  if not quiet:
+    print("Result Directory:", result_dir)
+    print("Odometry Run:", odo_input)
+    print("Dataset Directory:", dataset_dir)
 
   try:
     # Removes parameter related components from the odometry input
@@ -72,17 +73,38 @@ def main(dataset_dir, result_dir, velocity):
   data_dir = osp.join(odo_dir, "graph/data")
   if not osp.exists(data_dir):
     return
-  print("Looking at result data directory:", data_dir)
+  if not quiet: print("Looking at result data directory:", data_dir)
 
-  T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
-                            [-0.99955003, 0.0299955, 0., 0.0],
-                            [ 0, 0, 1, 1.45],
-                            [ 0, 0, 0, 1]])
+  # Radar results are in radar frame (not applanix like lidar)
+  T_applanix_wheel_file = os.path.join(dataset_dir, odo_input, "calib/T_applanix_wheel.txt")
+  if not os.path.exists(T_applanix_wheel_file):
+    print("File does not exist:", T_applanix_wheel_file, ". Loading default.")
+    T_applanix_wheel = np.array([[0.999560,  0.029665, 0.000000, -0.813993],
+                                [-0.029665, 0.999560, 0.000000, -0.455312],
+                                [0.000000, 0.000000, 1.000000, -1.610000],
+                                [0.000000, 0.000000, 0.000000, 1.000000]])
+  else:
+    T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
+  T_wheel_applanix = get_inverse_tf(T_applanix_wheel)
+  T_wheelfwd_wheel = np.array([[0, 1, 0, 0],
+                              [-1, 0, 0, 0],
+                              [0, 0, 1, 0],
+                              [0, 0, 0, 1]])
+  T_robot_applanix = T_wheelfwd_wheel @ T_wheel_applanix
 
-  T_applanix_lidar = dataset_odo.sequences[0].calib.T_applanix_lidar
-  T_radar_lidar = dataset_odo.sequences[0].calib.T_radar_lidar
-  T_applanix_radar = T_applanix_lidar @ get_inverse_tf(T_radar_lidar)
-  T_robot_radar = T_axel_applanix @ T_applanix_radar
+  # Load in T_radar_applanix
+  T_radar_lidar_file = os.path.join(dataset_dir, odo_input, "calib/T_radar_lidar.txt")
+  if not os.path.exists(T_radar_lidar_file):
+    raise Exception("File does not exist: " + T_radar_lidar_file)
+  T_radar_lidar = np.loadtxt(T_radar_lidar_file)
+  T_applanix_lidar_file = os.path.join(dataset_dir, odo_input, "calib/T_applanix_lidar.txt")
+  if not os.path.exists(T_applanix_lidar_file):
+    raise Exception("File does not exist: " + T_applanix_lidar_file)
+  T_applanix_lidar = np.loadtxt(T_applanix_lidar_file)
+  T_radar_applanix = T_radar_lidar @ get_inverse_tf(T_applanix_lidar)
+
+  # Compute final transform from radar to robot frame
+  T_robot_radar = T_robot_applanix @ get_inverse_tf(T_radar_applanix)
 
   # get bag file
   bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "odometry_result")
@@ -108,14 +130,14 @@ def main(dataset_dir, result_dir, velocity):
   with open(osp.join(output_dir, odo_input + ".txt"), "+w") as file:
     writer = csv.writer(file, delimiter=' ')
     writer.writerows(result)
-    print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
+    if not quiet: print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
 
   output_dir = osp.join(result_dir, "../odometry_result")
   os.makedirs(output_dir, exist_ok=True)
   with open(osp.join(output_dir, odo_input + ".txt"), "+w") as file:
     writer = csv.writer(file, delimiter=' ')
     writer.writerows(result)
-    print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
+    if not quiet: print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
 
   if velocity:
     bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "odometry_vel_result")
@@ -135,25 +157,23 @@ def main(dataset_dir, result_dir, velocity):
       w_v_r_robot[4] = message[1].angular.y
       w_v_r_robot[5] = message[1].angular.z
 
-      w_r_v_radar = np.zeros((6))
-      w_r_v_radar[:3] = (- w_v_r_robot[:3].reshape(1, 3) @ T_robot_radar[:3, :3]).flatten()
-      w_r_v_radar[3:] = (- w_v_r_robot[3:].reshape(1, 3) @ T_robot_radar[:3, :3]).flatten()
-
-      vel_results.append([timestamp] + w_r_v_radar.flatten().tolist())
+      # Transform velocity from robot to radar frame/origin
+      w_s_v_radar = - se3op.tranAd(get_inverse_tf(T_robot_radar)) @ w_v_r_robot.reshape(6, 1)
+      vel_results.append([timestamp] + w_s_v_radar.flatten().tolist())
 
     output_dir = osp.join(result_dir, "odometry_vel_result")
     os.makedirs(output_dir, exist_ok=True)
     with open(osp.join(output_dir, odo_input + ".txt"), "+w") as file:
       writer = csv.writer(file, delimiter=' ')
       writer.writerows(vel_results)
-      print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
+      if not quiet: print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
 
     output_dir = osp.join(result_dir, "../odometry_vel_result")
     os.makedirs(output_dir, exist_ok=True)
     with open(osp.join(output_dir, odo_input + ".txt"), "+w") as file:
       writer = csv.writer(file, delimiter=' ')
       writer.writerows(vel_results)
-      print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
+      if not quiet: print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
 
 
 if __name__ == "__main__":
@@ -166,7 +186,8 @@ if __name__ == "__main__":
   parser.add_argument('--dataset', default=os.getcwd(), type=str, help='path to boreas dataset (contains boreas-*)')
   parser.add_argument('--path', default=os.getcwd(), type=str, help='path to vtr folder (default: os.getcwd())')
   parser.add_argument('--velocity', default=False, action='store_true', help='evaluate velocity (default: False)')
+  parser.add_argument('--quiet', action='store_true', help='suppress verbose output (default: False)')
 
   args = parser.parse_args()
 
-  main(args.dataset, args.path, args.velocity)
+  main(args.dataset, args.path, args.velocity, args.quiet)

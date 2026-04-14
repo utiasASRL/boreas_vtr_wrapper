@@ -51,15 +51,16 @@ class BagFileParser():
     return [(timestamp, deserialize_message(data, self.topic_msg_message[topic_name])) for timestamp, data in rows]
 
 
-def main(dataset_dir, result_dir):
+def main(dataset_dir, result_dir, quiet=False):
   result_dir = osp.normpath(result_dir)
   odo_input = osp.basename(result_dir)
   loc_inputs = [i for i in os.listdir(result_dir) if (i != odo_input and i.startswith("boreas"))]
   loc_inputs.sort()
-  print("Result Directory:", result_dir)
-  print("Odometry Run:", odo_input)
-  print("Localization Runs:", loc_inputs)
-  print("Dataset Directory:", dataset_dir)
+  if not quiet:
+    print("Result Directory:", result_dir)
+    print("Odometry Run:", odo_input)
+    print("Localization Runs:", loc_inputs)
+    print("Dataset Directory:", dataset_dir)
 
   # dataset directory and necessary sequences to load
   dataset_odo = BoreasDataset(osp.normpath(dataset_dir), [[odo_input]])
@@ -67,31 +68,41 @@ def main(dataset_dir, result_dir):
   # generate ground truth pose dictionary
   ground_truth_poses_odo = dict()
   for sequence in dataset_odo.sequences:
-    # Ground truth is provided w.r.t sensor, so we set sensor to vehicle
-    # transform to identity
-    # yfwd2xfwd = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-    # # T_robot_radar_odo = yfwd2xfwd @ sequence.calib.T_applanix_lidar @ get_inverse_tf(sequence.calib.T_radar_lidar)
+    T_applanix_wheel_file = os.path.join(dataset_dir, odo_input, "calib/T_applanix_wheel.txt")
+    if not os.path.exists(T_applanix_wheel_file):
+      print("File does not exist:", T_applanix_wheel_file, ". Loading default.")
+      T_applanix_wheel = np.array([[0.999560,  0.029665, 0.000000, -0.813993],
+                                  [-0.029665, 0.999560, 0.000000, -0.455312],
+                                  [0.000000, 0.000000, 1.000000, -1.610000],
+                                  [0.000000, 0.000000, 0.000000, 1.000000]])
+    else:
+      T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
+    T_wheel_applanix = get_inverse_tf(T_applanix_wheel)
+    T_wheelfwd_wheel = np.array([[0, 1, 0, 0],
+                                [-1, 0, 0, 0],
+                                [0, 0, 1, 0],
+                                [0, 0, 0, 1]])
+    T_robot_applanix = T_wheelfwd_wheel @ T_wheel_applanix
 
-    # T_robot_radar_odo = yfwd2xfwd @ np.array([[ 0.99955246, 0.02991469, 0., 0.65],
-    #                                         [-0.02991469, 0.99955246, 0., 0.],
-    #                                         [ 0., 0., 1., -1.92],
-    #                                         [ 0., 0., 0., 1.]])
-    
-    T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
-                              [-0.99955003, 0.0299955, 0., 0.0],
-                              [ 0, 0, 1, 1.45],
-                              [ 0, 0, 0, 1]])
+    # Load in T_radar_applanix
+    T_radar_lidar_file = os.path.join(dataset_dir, odo_input, "calib/T_radar_lidar.txt")
+    if not os.path.exists(T_radar_lidar_file):
+      raise Exception("File does not exist: " + T_radar_lidar_file)
+    T_radar_lidar = np.loadtxt(T_radar_lidar_file)
+    T_applanix_lidar_file = os.path.join(dataset_dir, odo_input, "calib/T_applanix_lidar.txt")
+    if not os.path.exists(T_applanix_lidar_file):
+      raise Exception("File does not exist: " + T_applanix_lidar_file)
+    T_applanix_lidar = np.loadtxt(T_applanix_lidar_file)
+    T_radar_applanix = T_radar_lidar @ get_inverse_tf(T_applanix_lidar)
 
-    T_robot_radar_odo = T_axel_applanix @ sequence.calib.T_applanix_lidar @ get_inverse_tf(sequence.calib.T_radar_lidar)
-
-    # T_robot_radar_odo = sequence.calib.T_applanix_lidar @ get_inverse_tf(sequence.calib.T_radar_lidar)
-    T_radar_robot_odo = get_inverse_tf(T_robot_radar_odo)
+    # Compute final transform from radar to robot frame
+    T_robot_radar_odo = T_robot_applanix @ get_inverse_tf(T_radar_applanix)
 
     # build dictionary
     precision = 1e7  # divide by this number to ensure always find the timestamp
     ground_truth_poses_odo.update(
         {int(int(frame.timestamp * 1e9) / precision): frame.pose for frame in sequence.radar_frames})
-  print("Loaded number of odometry poses: ", len(ground_truth_poses_odo))
+  if not quiet: print("Loaded number of odometry poses: ", len(ground_truth_poses_odo))
 
   for i, loc_input in enumerate(loc_inputs):
 
@@ -101,25 +112,35 @@ def main(dataset_dir, result_dir):
     # generate ground truth pose dictionary
     ground_truth_poses_loc = dict()
     for sequence in dataset_loc.sequences:
-      # Ground truth is provided w.r.t sensor, so we set sensor to vehicle
-      # transform to identity
-      # yfwd2xfwd = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-      # # T_robot_radar_loc = yfwd2xfwd @ sequence.calib.T_applanix_lidar @ get_inverse_tf(sequence.calib.T_radar_lidar)
-      # # T_robot_radar_loc = sequence.calib.T_applanix_radar
+      T_applanix_wheel_file = os.path.join(dataset_dir, loc_input, "calib/T_applanix_wheel.txt")
+      if not os.path.exists(T_applanix_wheel_file):
+        print("File does not exist:", T_applanix_wheel_file, ". Loading default.")
+        T_applanix_wheel = np.array([[0.999560,  0.029665, 0.000000, -0.813993],
+                                    [-0.029665, 0.999560, 0.000000, -0.455312],
+                                    [0.000000, 0.000000, 1.000000, -1.610000],
+                                    [0.000000, 0.000000, 0.000000, 1.000000]])
+      else:
+        T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
+      T_wheel_applanix = get_inverse_tf(T_applanix_wheel)
+      T_wheelfwd_wheel = np.array([[0, 1, 0, 0],
+                                  [-1, 0, 0, 0],
+                                  [0, 0, 1, 0],
+                                  [0, 0, 0, 1]])
+      T_robot_applanix = T_wheelfwd_wheel @ T_wheel_applanix
 
-      # T_robot_radar_loc = yfwd2xfwd @ np.array([[ 0.99955246, 0.02991469, 0., 0.65],
-      #                                       [-0.02991469, 0.99955246, 0., 0.],
-      #                                       [ 0., 0., 1., -1.92],
-      #                                       [ 0., 0., 0., 1.]])
-      
-      T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
-                                [-0.99955003, 0.0299955, 0., 0.0],
-                                [ 0, 0, 1, 1.45],
-                                [ 0, 0, 0, 1]])
+      # Load in T_radar_applanix
+      T_radar_lidar_file = os.path.join(dataset_dir, loc_input, "calib/T_radar_lidar.txt")
+      if not os.path.exists(T_radar_lidar_file):
+        raise Exception("File does not exist: " + T_radar_lidar_file)
+      T_radar_lidar = np.loadtxt(T_radar_lidar_file)
+      T_applanix_lidar_file = os.path.join(dataset_dir, loc_input, "calib/T_applanix_lidar.txt")
+      if not os.path.exists(T_applanix_lidar_file):
+        raise Exception("File does not exist: " + T_applanix_lidar_file)
+      T_applanix_lidar = np.loadtxt(T_applanix_lidar_file)
+      T_radar_applanix = T_radar_lidar @ get_inverse_tf(T_applanix_lidar)
 
-      T_robot_radar_loc = T_axel_applanix @ sequence.calib.T_applanix_lidar @ get_inverse_tf(sequence.calib.T_radar_lidar)
-
-
+      # Compute final transform from radar to robot frame
+      T_robot_radar_loc = T_robot_applanix @ get_inverse_tf(T_radar_applanix)
       T_radar_robot_loc = get_inverse_tf(T_robot_radar_loc)
 
       # build dictionary
@@ -127,14 +148,14 @@ def main(dataset_dir, result_dir):
       ground_truth_poses_loc.update(
           {int(int(frame.timestamp * 1e9) / precision): frame.pose for frame in sequence.radar_frames})
 
-    print("Loaded number of localization poses: ", len(ground_truth_poses_loc))
+    if not quiet: print("Loaded number of localization poses: ", len(ground_truth_poses_loc))
 
     loc_dir = osp.join(result_dir, loc_input)
 
     data_dir = osp.join(loc_dir, "graph/data")
     if not osp.exists(data_dir):
       continue
-    print("Looking at result data directory:", data_dir)
+    if not quiet: print("Looking at result data directory:", data_dir)
 
     # get bag file
     bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "localization_result")
@@ -172,14 +193,14 @@ def main(dataset_dir, result_dir):
       # compute error
       errors[i, :] = se3op.tran2vec(T_map_test_in_radar @ T_test_map_in_radar_gt).flatten()
 
-    print(np.mean(np.abs(errors), axis=0))
+    if not quiet: print(np.mean(np.abs(errors), axis=0))
 
     output_dir = osp.join(result_dir, "localization_result")
     os.makedirs(output_dir, exist_ok=True)
     with open(osp.join(output_dir, loc_input + ".txt"), "+w") as file:
       writer = csv.writer(file, delimiter=' ')
       writer.writerows(result)
-      print("Written to file:", osp.join(output_dir, loc_input + ".txt"))
+      if not quiet: print("Written to file:", osp.join(output_dir, loc_input + ".txt"))
 
 
 if __name__ == "__main__":
@@ -191,7 +212,8 @@ if __name__ == "__main__":
   # <rosbag name>/<rosbag name>_0.db3
   parser.add_argument('--dataset', default=os.getcwd(), type=str, help='path to boreas dataset (contains boreas-*)')
   parser.add_argument('--path', default=os.getcwd(), type=str, help='path to vtr folder (default: os.getcwd())')
+  parser.add_argument('--quiet', action='store_true', help='suppress verbose output (default: False)')
 
   args = parser.parse_args()
 
-  main(args.dataset, args.path)
+  main(args.dataset, args.path, args.quiet)

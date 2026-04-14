@@ -3,6 +3,8 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rosgraph_msgs/msg/clock.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/int32.hpp"
+#include "visualization_msgs/msg/marker.hpp"
 
 #include "vtr_common/timing/utils.hpp"
 #include "vtr_common/utils/filesystem.hpp"
@@ -12,7 +14,7 @@
 #include "vtr_tactic/rviz_tactic_callback.hpp"
 #include "vtr_tactic/tactic.hpp"
 
-#include "vtr_testing_lidar/utils.hpp"
+#include "vtr_testing_common/vtr_testing_common.hpp"
 
 namespace fs = std::filesystem;
 using namespace vtr;
@@ -21,108 +23,6 @@ using namespace vtr::logging;
 using namespace vtr::tactic;
 using namespace vtr::testing;
 
-float getFloatFromByteArray(char *byteArray, uint index) {
-  return *((float *)(byteArray + index));
-}
-
-int64_t getStampFromPath(const std::string &path) {
-  std::vector<std::string> parts;
-  boost::split(parts, path, boost::is_any_of("/"));
-  std::string stem = parts[parts.size() - 1];
-  boost::split(parts, stem, boost::is_any_of("."));
-  int64_t time1 = std::stoll(parts[0]);
-  return time1 * 1000;
-}
-
-std::pair<int64_t, Eigen::MatrixXd> load_lidar(const std::string &path) {
-  std::ifstream ifs(path, std::ios::binary);
-  std::vector<char> buffer(std::istreambuf_iterator<char>(ifs), {});
-  uint float_offset = 4;
-  uint fields = 6;  // x, y, z, i, r, t
-  uint point_step = float_offset * fields;
-  uint N = floor(buffer.size() / point_step);
-  Eigen::MatrixXd pc(Eigen::MatrixXd::Ones(N, fields));
-  for (uint i = 0; i < N; ++i) {
-    uint bufpos = i * point_step;
-    for (uint j = 0; j < fields; ++j) {
-      pc(i, j) =
-          getFloatFromByteArray(buffer.data(), bufpos + j * float_offset);
-    }
-  }
-  // Add offset to timestamps
-  const auto timestamp = getStampFromPath(path);
-  double t = double(timestamp / 1000) * 1.0e-6;
-  pc.block(0, 5, N, 1).array() += t;
-
-  return std::make_pair(timestamp, std::move(pc));
-}
-
-EdgeTransform load_T_robot_lidar(const fs::path &path) {
-  std::ifstream ifs(path / "calib" / "T_applanix_lidar.txt", std::ios::in);
-
-  Eigen::Matrix4d T_applanix_lidar_mat;
-  for (size_t row = 0; row < 4; row++)
-    for (size_t col = 0; col < 4; col++) ifs >> T_applanix_lidar_mat(row, col);
-
-  // Extrinsic from radar to rear axel
-  Eigen::Matrix4d T_axel_applanix;
-  // Want to estimate at rear axel, this transform has x forward, y right, z down
-  T_axel_applanix << 0.0299955, 0.99955003, 0, 0.51,
-                    -0.99955003, 0.0299955, 0, 0.0,
-                    0, 0, 1, 1.45,
-                    0, 0, 0, 1;
-
-  EdgeTransform T_robot_lidar(Eigen::Matrix4d(T_axel_applanix * T_applanix_lidar_mat),
-                              Eigen::Matrix<double, 6, 6>::Zero());
-
-  return T_robot_lidar;
-}
-
-Eigen::Matrix3d toRoll(const double &r) {
-  Eigen::Matrix3d roll;
-  roll << 1, 0, 0, 0, cos(r), sin(r), 0, -sin(r), cos(r);
-  return roll;
-}
-
-Eigen::Matrix3d toPitch(const double &p) {
-  Eigen::Matrix3d pitch;
-  pitch << cos(p), 0, -sin(p), 0, 1, 0, sin(p), 0, cos(p);
-  return pitch;
-}
-
-Eigen::Matrix3d toYaw(const double &y) {
-  Eigen::Matrix3d yaw;
-  yaw << cos(y), sin(y), 0, -sin(y), cos(y), 0, 0, 0, 1;
-  return yaw;
-}
-
-Eigen::Matrix3d rpy2rot(const double &r, const double &p, const double &y) {
-  return toRoll(r) * toPitch(p) * toYaw(y);
-}
-
-EdgeTransform load_T_enu_lidar_init(const fs::path &path) {
-  std::ifstream ifs(path / "applanix" / "lidar_poses.csv", std::ios::in);
-
-  std::string header;
-  std::getline(ifs, header);
-
-  std::string first_pose;
-  std::getline(ifs, first_pose);
-
-  std::stringstream ss{first_pose};
-  std::vector<double> gt;
-  for (std::string str; std::getline(ss, str, ',');)
-    gt.push_back(std::stod(str));
-
-  Eigen::Matrix4d T_mat = Eigen::Matrix4d::Identity();
-  T_mat.block<3, 3>(0, 0) = rpy2rot(gt[7], gt[8], gt[9]);
-  T_mat.block<3, 1>(0, 3) << gt[1], gt[2], gt[3];
-
-  EdgeTransform T(T_mat);
-  T.setZeroCovariance();
-
-  return T;
-}
 
 int main(int argc, char **argv) {
   // disable eigen multi-threading
@@ -160,18 +60,61 @@ int main(int argc, char **argv) {
   }
   configureLogging(log_filename, log_debug, log_enabled);
 
-  CLOG(WARNING, "test") << "Odometry Directory: " << odo_dir.string();
-  CLOG(WARNING, "test") << "Localization Directory: " << loc_dir.string();
-  CLOG(WARNING, "test") << "Output Directory: " << data_dir.string();
+  CLOG(WARNING, "boreas_wrapper") << "Odometry Directory: " << odo_dir.string();
+  CLOG(WARNING, "boreas_wrapper") << "Localization Directory: " << loc_dir.string();
+  CLOG(WARNING, "boreas_wrapper") << "Output Directory: " << data_dir.string();
 
   std::vector<std::string> parts;
   boost::split(parts, loc_dir_str, boost::is_any_of("/"));
   auto stem = parts.back();
   boost::replace_all(stem, "-", "_");
-  CLOG(WARNING, "test") << "Publishing status to topic: "
-                        << (stem + "_lidar_localization");
+  CLOG(WARNING, "boreas_wrapper") << "Publishing status to topic: "
+                                  << (stem + "_lidar_localization");
   const auto status_publisher = node->create_publisher<std_msgs::msg::String>(
       stem + "_lidar_localization", 1);
+
+  // Optional: marker publisher to show the frame number as text in RViz
+  const auto frame_marker_publisher = node->create_publisher<visualization_msgs::msg::Marker>(
+    "lidar_frame_marker", 1);
+
+  // Load IMU data
+  const auto use_imu = node->declare_parameter<bool>("boreas.imu.use_imu", false);
+  const auto imu_name = node->declare_parameter<std::string>("boreas.imu.imu_name", "dmu");
+  CLOG(WARNING, "boreas_wrapper") << "IMU enabled: " << use_imu;
+  std::vector<IMUMeasurement> all_imu_meas;
+  EdgeTransform T_imu_robot; 
+  if (use_imu) {
+    // Check that imu name is one of "dmu", "aeva", "imu"
+    CLOG(WARNING, "boreas_wrapper") << "IMU name: " << imu_name;
+    if (imu_name != "dmu" && imu_name != "aeva" && imu_name != "imu") {
+      CLOG(ERROR, "boreas_wrapper") << "Unknown IMU name: " << imu_name;
+      return 1;
+    }
+    const auto imu_file_name = (imu_name == "imu") ? "imu_raw.csv" : (imu_name + "_imu.csv");
+    const auto imu_path = loc_dir / "imu" / imu_file_name;
+    if (!fs::exists(imu_path)) {
+      CLOG(ERROR, "boreas_wrapper") << "IMU file does not exist: " << imu_path.string();
+      return 1;
+    }
+    load_all_imu_meas(imu_path, all_imu_meas, imu_file_name);
+    T_imu_robot = load_T_imu_robot(loc_dir, imu_name);
+    CLOG(WARNING, "boreas_wrapper") << "Loaded " << all_imu_meas.size() << " IMU measurements";
+    CLOG(WARNING, "boreas_wrapper") << "Transform from IMU to robot has been set to:\n" << T_imu_robot;
+  }
+
+  // Load wheel encoder data
+  const auto use_wheel_encoder = node->declare_parameter<bool>("boreas.wheel_encoder.use_wheel_encoder", false);
+  const auto encoder_max = node->declare_parameter<int>("boreas.wheel_encoder.encoder_max", 16777216);
+  CLOG(WARNING, "boreas_wrapper") << "Wheel encoder enabled: " << use_wheel_encoder;
+  std::vector<std::pair<int64_t, int64_t>> all_wheel_meas;
+  EdgeTransform T_wheel_robot; 
+  if (use_wheel_encoder) {
+    load_wheel_encoder_data(loc_dir, encoder_max, all_wheel_meas);
+    T_wheel_robot = load_T_wheel_robot(loc_dir);
+
+    CLOG(WARNING, "boreas_wrapper") << "Loaded " << all_wheel_meas.size() << " wheel measurements";
+    CLOG(WARNING, "boreas_wrapper") << "Transform from wheel to robot has been set to:\n" << T_wheel_robot;
+  }
 
   // Pose graph
   auto graph = tactic::Graph::MakeShared((data_dir / "graph").string(), true);
@@ -196,34 +139,43 @@ int main(int argc, char **argv) {
   // Get the path that we should repeat
   VertexId::Vector sequence;
   sequence.reserve(graph->numberOfVertices());
-  CLOG(WARNING, "test") << "Total number of vertices: "
-                        << graph->numberOfVertices();
+  CLOG(WARNING, "boreas_wrapper") << "Total number of vertices: "
+                                  << graph->numberOfVertices();
   // Extract the privileged sub graph from the full graph.
   using LocEvaluator = tactic::PrivilegedEvaluator<tactic::GraphBase>;
   auto evaluator = std::make_shared<LocEvaluator>(*graph);
   auto privileged_path = graph->getSubgraph(0ul, evaluator);
   std::stringstream ss;
-  ss << "Repeat vertices: ";
+
+  // Load parameter about whether to run localization in reverse
+  const auto reverse = node->declare_parameter<bool>("boreas.localization.reverse", false);
   for (auto it = privileged_path->begin(0ul); it != privileged_path->end();
        ++it) {
     ss << it->v()->id() << " ";
-    sequence.push_back(it->v()->id());
+    if (reverse) {
+      sequence.insert(sequence.begin(), it->v()->id());
+    }
+    else {
+      sequence.push_back(it->v()->id());
+    }
   }
-  CLOG(WARNING, "test") << ss.str();
+
+  CLOG(WARNING, "boreas_wrapper")<< "Test vertices: " << ss.str();
+  if (reverse) CLOG(WARNING, "boreas_wrapper") << "Running localization in reverse";
 
   /// NOTE: odometry is teach, localization is repeat
   auto T_loc_odo_init = [&]() {
     const auto T_robot_lidar_odo = load_T_robot_lidar(odo_dir);
-    const auto T_enu_lidar_odo = load_T_enu_lidar_init(odo_dir);
+    const auto T_enu_lidar_odo = load_T_enu_init(odo_dir, reverse, "lidar");
 
     const auto T_robot_lidar_loc = load_T_robot_lidar(loc_dir);
-    const auto T_enu_lidar_loc = load_T_enu_lidar_init(loc_dir);
+    const auto T_enu_lidar_loc = load_T_enu_init(loc_dir, false, "lidar");
 
     return T_robot_lidar_loc * T_enu_lidar_loc.inverse() * T_enu_lidar_odo *
            T_robot_lidar_odo.inverse();
   }();
   T_loc_odo_init.setCovariance(Eigen::Matrix<double, 6, 6>::Identity());
-  CLOG(WARNING, "test")
+  CLOG(WARNING, "boreas_wrapper")
       << "Transform from localization to odometry has been set to "
       << T_loc_odo_init.vec().transpose();
 
@@ -235,8 +187,8 @@ int main(int argc, char **argv) {
 
   const auto T_robot_lidar = load_T_robot_lidar(loc_dir);
   const auto T_lidar_robot = T_robot_lidar.inverse();
-  CLOG(WARNING, "test") << "Transform from " << robot_frame << " to "
-                        << lidar_frame << " has been set to" << T_lidar_robot;
+  CLOG(WARNING, "boreas_wrapper") << "Transform from " << robot_frame << " to "
+                                  << lidar_frame << " has been set to" << T_lidar_robot;
 
   auto tf_sbc = std::make_shared<tf2_ros::StaticTransformBroadcaster>(node);
   auto msg =
@@ -253,21 +205,32 @@ int main(int argc, char **argv) {
   for (const auto &dir_entry : fs::directory_iterator{loc_dir / "lidar"})
     if (dir_entry.path().extension() == ".bin") files.push_back(dir_entry);
   std::sort(files.begin(), files.end());
-  CLOG(WARNING, "test") << "Found " << files.size() << " lidar data";
-  const auto start_frame = node->declare_parameter<int>("localization.start_frame", 0);
-  const auto end_frame = node->declare_parameter<int>("localization.end_frame", -1);
+  CLOG(WARNING, "boreas_wrapper") << "Found " << files.size() << " lidar data";
+  const auto start_frame = node->declare_parameter<int>("boreas.odometry.start_frame", 0);
+  const auto end_frame = node->declare_parameter<int>("boreas.odometry.end_frame", -1);
+
+  // Load in groundtruth data
+  const auto load_gt = node->declare_parameter<bool>("boreas.load_gt", true);
+  CLOG(WARNING, "boreas_wrapper") << "Load groundtruth: " << load_gt;
+  std::vector<lgmath::se3::Transformation> T_lid_world_gt;
+  std::vector<Eigen::Vector<double, 6>> v_lid_gt;
+  // Reserve space
+  T_lid_world_gt.reserve(files.size());
+  v_lid_gt.reserve(files.size());
+  if (load_gt) {
+    load_lidar_groundtruth(loc_dir, T_lid_world_gt, v_lid_gt, "lidar");
+    CLOG(WARNING, "boreas_wrapper") << "Loaded groundtruth for " << T_lid_world_gt.size() << " frames";
+  }
 
   // thread handling variables
   TestControl test_control(node);
 
   // main loop
   int frame = 0;
+  int imu_counter = 0;
+  int wheel_counter = 0;
   auto it = files.begin();
   while (it != files.end()) {
-    if (end_frame >= 0 && frame > end_frame) {
-      break;
-    }
-
     if (!rclcpp::ok()) break;
     rclcpp::spin_some(node);
     if (test_control.terminate()) break;
@@ -275,16 +238,77 @@ int main(int argc, char **argv) {
     std::this_thread::sleep_for(
         std::chrono::milliseconds(test_control.delay()));
 
+    if (frame < start_frame) {
+      ++it;
+      ++frame;
+      continue;
+    } else if (end_frame > 0 && frame > end_frame) {
+      break;
+    }
+
     ///
     const auto [timestamp, points] = load_lidar(it->path().string());
-
-    CLOG(WARNING, "test") << "Loading lidar frame " << frame
-                          << " with timestamp " << timestamp;
+    CLOG(WARNING, "boreas_wrapper") << "\033[95mLoading lidar frame " << frame
+                                    << " with timestamp " << timestamp << "\033[0m";
 
     // publish clock for sim time
     auto time_msg = rosgraph_msgs::msg::Clock();
     time_msg.clock = rclcpp::Time(timestamp);
     clock_publisher->publish(time_msg);
+
+    // Feed in IMU data if available/desired
+    std::vector<sensor_msgs::msg::Imu> gyro_msgs;
+    if (use_imu) {
+      int64_t start_timestamp = points(0, 5) * 1.0e9;
+      int64_t end_timestamp = points(points.rows() - 1, 5) * 1.0e9;
+
+      if (imu_counter == 0) {
+        // Find IMU measurement right before lidar frame to initialize
+        while (all_imu_meas[imu_counter].timestamp_ns < start_timestamp) {
+          ++imu_counter;
+        }
+      }
+
+      // Loop through all IMU measurements from previous one to end of current lidar frame
+      // This captures IMU measurements that are between frames
+      Eigen::Matrix<double, 4, 1> imu_meas;
+      while (imu_counter < all_imu_meas.size() && all_imu_meas[imu_counter].timestamp_ns < end_timestamp) {
+        auto gyro_msg = sensor_msgs::msg::Imu();
+        gyro_msg.angular_velocity.x = all_imu_meas[imu_counter].angvel_x;
+        gyro_msg.angular_velocity.y = all_imu_meas[imu_counter].angvel_y;
+        gyro_msg.angular_velocity.z = all_imu_meas[imu_counter].angvel_z;
+        gyro_msg.header.stamp = rclcpp::Time(all_imu_meas[imu_counter].timestamp_ns);
+        gyro_msgs.push_back(gyro_msg);
+        ++imu_counter;
+      }
+      CLOG(DEBUG, "boreas_wrapper") << "Loaded " << gyro_msgs.size() << " IMU measurements";
+    }
+
+    // Feed in wheel encoder data if available/desired
+    std::vector<std::pair<rclcpp::Time, double>> wheel_meas;
+    if (use_wheel_encoder) {
+      int64_t start_timestamp = points(0, 5) * 1.0e9;
+      int64_t end_timestamp = points(points.rows() - 1, 5) * 1.0e9;
+      
+      if (wheel_counter == 0) {
+        // Find wheel measurement right before lidar frame to initialize
+        while (all_wheel_meas[wheel_counter].first < start_timestamp) {
+          ++wheel_counter;
+        }
+      }
+
+      // Loop through all wheel measurements from previous one to end of current lidar frame
+      // This captures wheel measurements that are between frames
+      while (wheel_counter < all_wheel_meas.size() && all_wheel_meas[wheel_counter].first < end_timestamp) {
+        std::pair<rclcpp::Time, double> wheel_msg = {
+          rclcpp::Time(all_wheel_meas[wheel_counter].first),            // timestamp
+          static_cast<double>(all_wheel_meas[wheel_counter].second)     // pulse count
+        };
+        wheel_meas.push_back(wheel_msg);
+        ++wheel_counter;
+      }
+      CLOG(DEBUG, "boreas_wrapper") << "Loaded " << wheel_meas.size() << " wheel measurements";
+    }
 
     // Convert message to query_data format and store into query_data
     auto query_data = std::make_shared<lidar::LidarQueryCache>();
@@ -306,6 +330,24 @@ int main(int argc, char **argv) {
     // fill in the vehicle to sensor transform and frame name
     query_data->T_s_r.emplace(T_lidar_robot);
 
+    // set gyro messages
+    if (gyro_msgs.size() > 0) {
+      query_data->T_s_r_gyro.emplace(T_imu_robot);
+      query_data->gyro_msgs.emplace(gyro_msgs);
+    }
+
+    // set wheel encoder messages
+    if (wheel_meas.size() > 0) {
+      query_data->T_s_r_wheel.emplace(T_wheel_robot);
+      query_data->wheel_meas.emplace(wheel_meas);
+    }
+
+    // Set groundtruth if loaded
+    if (load_gt && frame < T_lid_world_gt.size()) {
+      query_data->T_s_world_gt.emplace(T_lid_world_gt[frame]);
+      query_data->v_s_gt.emplace(v_lid_gt[frame]);
+    }    
+
     // execute the pipeline
     tactic->input(query_data);
 
@@ -314,6 +356,28 @@ int main(int argc, char **argv) {
                       std::to_string(frame) + " with timestamp " +
                       std::to_string(timestamp);
     status_publisher->publish(status_msg);
+
+    // Publish a visualization Marker so RViz can display the frame number as text
+    visualization_msgs::msg::Marker marker_msg;
+    marker_msg.header.stamp = rclcpp::Time(timestamp);
+    marker_msg.header.frame_id = robot_frame;  // show in robot frame; change if desired
+    marker_msg.ns = "lidar_frame_number";
+    marker_msg.id = 0;
+    marker_msg.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    marker_msg.action = visualization_msgs::msg::Marker::ADD;
+    // Position the text slightly above the robot origin
+    marker_msg.pose.position.x = -45.0;
+    marker_msg.pose.position.y = -45.0;
+    marker_msg.pose.position.z = 0.0;
+    marker_msg.pose.orientation.w = 1.0;
+    // Text size and color
+    marker_msg.scale.z = 5.0;  // height of the text
+    marker_msg.color.r = 1.0f;
+    marker_msg.color.g = 1.0f;
+    marker_msg.color.b = 1.0f;
+    marker_msg.color.a = 1.0f;
+    marker_msg.text = std::string("Frame: ") + std::to_string(frame);
+    frame_marker_publisher->publish(marker_msg);
 
     ++it;
     ++frame;
@@ -325,8 +389,8 @@ int main(int argc, char **argv) {
   callback.reset();
   pipeline.reset();
   pipeline_factory.reset();
-  CLOG(WARNING, "test") << "Saving pose graph and reset.";
+  CLOG(WARNING, "boreas_wrapper") << "Saving pose graph and reset.";
   graph->save();
   graph.reset();
-  CLOG(WARNING, "test") << "Saving pose graph and reset. - DONE!";
+  CLOG(WARNING, "boreas_wrapper") << "Saving pose graph and reset. - DONE!";
 }

@@ -51,7 +51,7 @@ class BagFileParser():
     return [(timestamp, deserialize_message(data, self.topic_msg_message[topic_name])) for timestamp, data in rows]
 
 
-def main(dataset_dir, result_dir):
+def main(dataset_dir, result_dir, velocity):
   result_dir = osp.normpath(result_dir)
   odo_input = osp.basename(result_dir)
   odo_input_seq = odo_input.split('.', 1)[0]
@@ -72,38 +72,21 @@ def main(dataset_dir, result_dir):
     print("Data directory does not exist:", data_dir)
     return
   print("Looking at result data directory:", data_dir)
+  
+  T_applanix_wheel_file = os.path.join(dataset_dir, odo_input_seq, "calib/T_applanix_wheel.txt")
+  if not os.path.exists(T_applanix_wheel_file):
+    print("File does not exist:", T_applanix_wheel_file)
+    return
+  T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
+  T_wheel_applanix = get_inverse_tf(T_applanix_wheel)
 
-  T_applanix_aeva = dataset_odo.sequences[0].calib.T_applanix_aeva
-  print("T_applanix_aeva before:\n", T_applanix_aeva)
-  # this is a correction to the calibration
-  T_agt_apd = np.array([
-      [0.995621, 0.002137, 0.09346, 0.002811],
-      [-0.003235, 0.999928, 0.011597, -0.04655],
-      [-0.093429, -0.011848, 0.995555, 0.128853],
-      [0., 0., 0., 1.],
-  ])
-  T_applanix_aeva = T_agt_apd @ T_applanix_aeva
-  print("T_applanix_aeva after:\n", T_applanix_aeva)
+  T_wheelfwd_wheel = np.array([[ 0, 1, 0, 0],
+                               [-1, 0, 0, 0],
+                               [ 0, 0, 1, 0],
+                               [ 0, 0, 0, 1]])
 
-  # TODO: robot frame should be at rear-axle of the vehicle, update this!
-  ## old way of getting robot applanix
-  # T_robot_aeva = np.array([[1, 0, 0, 0.836819], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-  #
-
-  ## new way of getting robot applanix
-  T_applanix_lidar = dataset_odo.sequences[0].calib.T_applanix_lidar
-  T_radar_lidar = dataset_odo.sequences[0].calib.T_radar_lidar
-  T_applanix_radar = T_applanix_lidar @ get_inverse_tf(T_radar_lidar)
-  T_aeva_radar = get_inverse_tf(T_applanix_aeva) @ T_applanix_radar
-  T_radar_robot = np.array([[1, 0, 0, -0.26], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-  T_robot_aeva = get_inverse_tf(T_aeva_radar @ T_radar_robot)
-  # T_robot_aeva: [[ 0.99997365 -0.00723374 -0.00099997  0.63984747]
-  #               [  0.00723374  0.99997365 -0.00000723  0.41767399]
-  #               [  0.001       0.          1.         -0.62863152]
-  #               [  0.          0.          0.          1.        ]]
-  print("T_robot_aeva should be:\n", T_robot_aeva)
-  T_robot_applanix = T_robot_aeva @ get_inverse_tf(T_applanix_aeva)
-
+  T_robot_applanix = T_wheelfwd_wheel @ T_wheel_applanix
+  
   # get bag file
   bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "odometry_result")
   parser = BagFileParser(bag_file)
@@ -132,6 +115,41 @@ def main(dataset_dir, result_dir):
     writer.writerows(result)
     print("Written to file:", osp.join(output_dir, odo_input_seq + ".txt"))
 
+  if velocity:
+    bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "odometry_vel_result")
+    parser = BagFileParser(bag_file)
+    messages = parser.get_bag_messages("odometry_vel_result")
+
+    vel_results = []
+    for _, message in enumerate(messages):
+      w_v_r_robot = np.zeros((6))
+      w_v_r_robot[0] = message[1].linear.x
+      w_v_r_robot[1] = message[1].linear.y
+      w_v_r_robot[2] = message[1].linear.z
+      w_v_r_robot[3] = message[1].angular.x
+      w_v_r_robot[4] = message[1].angular.y
+      w_v_r_robot[5] = message[1].angular.z
+
+      # Transform velocity from robot to applanix frame/origin (lidar results are in applanix frame)
+      w_a_v_applanix = - se3op.tranAd(get_inverse_tf(T_robot_applanix)) @ w_v_r_robot.reshape(6, 1)
+
+      timestamp = int(int(message[0]) / 1000)
+      vel_results.append([timestamp] + w_a_v_applanix.flatten().tolist())
+
+    output_dir = osp.join(result_dir, "odometry_vel_result")
+    os.makedirs(output_dir, exist_ok=True)
+    with open(osp.join(output_dir, odo_input + ".txt"), "+w") as file:
+      writer = csv.writer(file, delimiter=' ')
+      writer.writerows(vel_results)
+      print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
+
+    output_dir = osp.join(result_dir, "../odometry_vel_result")
+    os.makedirs(output_dir, exist_ok=True)
+    with open(osp.join(output_dir, odo_input + ".txt"), "+w") as file:
+      writer = csv.writer(file, delimiter=' ')
+      writer.writerows(vel_results)
+      print("Written to file:", osp.join(output_dir, odo_input + ".txt"))
+
 
 if __name__ == "__main__":
 
@@ -142,7 +160,8 @@ if __name__ == "__main__":
   # <rosbag name>/<rosbag name>_0.db3
   parser.add_argument('--dataset', default=os.getcwd(), type=str, help='path to boreas dataset (contains boreas-*)')
   parser.add_argument('--path', default=os.getcwd(), type=str, help='path to vtr folder (default: os.getcwd())')
+  parser.add_argument('--velocity', default=False, action='store_true', help='evaluate velocity (default: False)')
 
   args = parser.parse_args()
 
-  main(args.dataset, args.path)
+  main(args.dataset, args.path, args.velocity)

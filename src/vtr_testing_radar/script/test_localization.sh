@@ -15,7 +15,7 @@ fi
 echo "Running localization on sequence ${LOC_INPUT} to reference sequence ${ODO_INPUT}, storing result to ${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}"
 
 # Source the VTR environment with the testing package
-source ${VTRRROOT}/install/setup.bash
+source ${VTRRROOT}/src/install/setup.bash
 
 graph_dir=${VTRRRESULT}/${ODO_INPUT}/${LOC_INPUT}/graph
 if [ -d $graph_dir ]; then

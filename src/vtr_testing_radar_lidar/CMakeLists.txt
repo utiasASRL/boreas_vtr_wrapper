@@ -11,11 +11,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 
-find_package(vtr_common REQUIRED)
-find_package(vtr_logging REQUIRED)
+find_package(vtr_testing_common REQUIRED)
 find_package(vtr_radar_lidar REQUIRED)
-
-## C++ Libraries
 
 ## Executables
 include_directories(
@@ -25,12 +22,7 @@ include_directories(
 )
 
 add_executable(${PROJECT_NAME}_boreas_localization src/boreas_localization.cpp)
-ament_target_dependencies(${PROJECT_NAME}_boreas_localization rclcpp std_msgs vtr_common vtr_logging vtr_radar_lidar)
-
-install(
-  DIRECTORY include/
-  DESTINATION include
-)
+ament_target_dependencies(${PROJECT_NAME}_boreas_localization rclcpp std_msgs vtr_testing_common vtr_radar_lidar)
 
 install(
   TARGETS
@@ -39,11 +31,6 @@ install(
   ARCHIVE DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
   INCLUDES DESTINATION include
-)
-
-install(
-  DIRECTORY config
-  DESTINATION share/${PROJECT_NAME}/
 )
 
 if(BUILD_TESTING)

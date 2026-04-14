@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+    <name>vtr_testing_common</name>
+    <version>0.0.0</version>
+    <description> Shared utilities for vtr_testing packages. Provides common C++ headers (TestControl, IMU/wheel encoder loading, rotation helpers) and Python utilities (BagFileParser, get_inverse_tf) used across vtr_testing_aeva, vtr_testing_lidar, vtr_testing_radar, and vtr_testing_radar_lidar. </description>
+    <maintainer email="daniil.lisus@mail.utoronto.ca">Daniil</maintainer>
+    <license>BSD</license>
+
+    <buildtool_depend>ament_cmake</buildtool_depend>
+
+    <depend>rclcpp</depend>
+    <depend>vtr_common</depend>
+    <depend>vtr_logging</depend>
+
+    <test_depend>ament_cmake_gtest</test_depend>
+    <test_depend>ament_lint_auto</test_depend>
+    <test_depend>ament_cmake_lint_cmake</test_depend>
+    <test_depend>ament_cmake_xmllint</test_depend>
+    <export>
+        <build_type>ament_cmake</build_type>
+    </export>
+</package>

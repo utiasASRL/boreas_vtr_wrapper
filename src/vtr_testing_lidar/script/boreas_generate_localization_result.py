@@ -67,18 +67,24 @@ def main(dataset_dir, result_dir):
   # generate ground truth pose dictionary
   ground_truth_poses_odo = dict()
   for sequence in dataset_odo.sequences:
-    # Ground truth is provided w.r.t sensor, so we set sensor to vehicle
-    # transform to identity
-    yfwd2xfwd = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+    # Ground truth is provided w.r.t sensor, so we want to get transfrom from sensor to robot (rear wheel) frame
+    T_applanix_wheel_file = os.path.join(dataset_dir, odo_input, "calib/T_applanix_wheel.txt")
+    if not os.path.exists(T_applanix_wheel_file):
+      print("File does not exist:", T_applanix_wheel_file, ". Loading default.")
+      T_applanix_wheel = np.array([[0.999560,  0.029665, 0.000000, -0.813993],
+                                  [-0.029665, 0.999560, 0.000000, -0.455312],
+                                  [0.000000, 0.000000, 1.000000, -1.610000],
+                                  [0.000000, 0.000000, 0.000000, 1.000000]])
+    else:
+      T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
+    T_wheel_applanix = get_inverse_tf(T_applanix_wheel)
+    T_wheelfwd_wheel = np.array([[0, 1, 0, 0],
+                                [-1, 0, 0, 0],
+                                [0, 0, 1, 0],
+                                [0, 0, 0, 1]])
 
-    T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
-                              [-0.99955003, 0.0299955, 0., 0.0],
-                              [ 0, 0, 1, 1.45],
-                              [ 0, 0, 0, 1]])
-
-    T_robot_lidar_odo = T_axel_applanix @ sequence.calib.T_applanix_lidar
-    # T_robot_lidar_odo = sequence.calib.T_applanix_lidar
-    T_lidar_robot_odo = get_inverse_tf(T_robot_lidar_odo)
+    T_robot_applanix = T_wheelfwd_wheel @ T_wheel_applanix
+    T_robot_lidar_odo = T_robot_applanix @ sequence.calib.T_applanix_lidar
 
     # build dictionary
     precision = 1e7  # divide by this number to ensure always find the timestamp
@@ -94,17 +100,24 @@ def main(dataset_dir, result_dir):
     # generate ground truth pose dictionary
     ground_truth_poses_loc = dict()
     for sequence in dataset_loc.sequences:
-      # Ground truth is provided w.r.t sensor, so we set sensor to vehicle
-      # transform to identity
-      yfwd2xfwd = np.array([[0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+      # Ground truth is provided w.r.t sensor, so we want to get transform from sensor to robot (rear wheel) frame
+      T_applanix_wheel_file = os.path.join(dataset_dir, loc_input, "calib/T_applanix_wheel.txt")
+      if not os.path.exists(T_applanix_wheel_file):
+        print("File does not exist:", T_applanix_wheel_file, ". Loading default.")
+        T_applanix_wheel = np.array([[0.999560,  0.029665, 0.000000, -0.813993],
+                                    [-0.029665, 0.999560, 0.000000, -0.455312],
+                                    [0.000000, 0.000000, 1.000000, -1.610000],
+                                    [0.000000, 0.000000, 0.000000, 1.000000]])
+      else:
+        T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
+      T_wheel_applanix = get_inverse_tf(T_applanix_wheel)
+      T_wheelfwd_wheel = np.array([[0, 1, 0, 0],
+                                  [-1, 0, 0, 0],
+                                  [0, 0, 1, 0],
+                                  [0, 0, 0, 1]])
 
-      T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
-                                [-0.99955003, 0.0299955, 0., 0.0],
-                                [ 0, 0, 1, 1.45],
-                                [ 0, 0, 0, 1]])
-
-      T_robot_lidar_loc = T_axel_applanix @ sequence.calib.T_applanix_lidar
-      # T_robot_lidar_loc = sequence.calib.T_applanix_lidar
+      T_robot_applanix = T_wheelfwd_wheel @ T_wheel_applanix
+      T_robot_lidar_loc = T_robot_applanix @ sequence.calib.T_applanix_lidar
       T_lidar_robot_loc = get_inverse_tf(T_robot_lidar_loc)
 
       # build dictionary

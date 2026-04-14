@@ -14,7 +14,7 @@ fi
 echo "Running preprocessing on sequence ${ODO_INPUT}, storing result to ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}"
 
 # Source the VTR environment with the testing package
-source ${VTRRROOT}/install/setup.bash
+source ${VTRRROOT}/src/install/setup.bash
 
 # Copy over parameter file
 mkdir -p ${VTRRRESULT}/${ODO_INPUT}/${ODO_INPUT}

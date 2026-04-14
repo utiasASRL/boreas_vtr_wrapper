@@ -22,7 +22,7 @@ export VTRRRESULT=${VTRTEMP}/radar_lidar/boreas # result location MAYBE CHANGE T
 mkdir -p ${VTRRRESULT}
 
 # Source the VTR environment with the testing package
-source ${VTRRROOT}/install/setup.bash
+source ${VTRRROOT}/src/install/setup.bash
 
 # Choose a Teach (ODO_INPUT) and Repeat (LOC_INPUT) run from boreas dataset
 ODO_INPUT=boreas-2020-11-26-13-58

@@ -1,131 +1,48 @@
-```
-
-# Installation
-
-## Setup VTR3 Directories
-
-Create the following directories in your local filesystem. Later they will be mapped to the docker container.
-
-```Bash
-export VTRROOT=~/ASRL  # (INTERNAL default) root directory of VTR3
-# you can change the following directories to anywhere appropriate
-export VTRSRC=${VTRROOT}/vtr3        # source code of VTR3
-export VTRDEPS=${VTRROOT}/deps       # system dependencies of VTR3
-export VTRTEMP=${VTRROOT}/temp       # temporary data directory for testing
-mkdir -p ${VTRSRC} ${VTRTEMP} ${VTRDEPS}
-```
-
-Reference: https://github.com/utiasASRL/vtr3/wiki/Installation-Guide
-
-## Download VTR3 Source Code
-
-Also to your local filesystem, so that you don't have to access them from within the docker container.
-
-```Bash
-cd ${VTRSRC}
-git clone git@github.com:utiasASRL/vtr3.git .
-git checkout 6d64daa  # commit hash specified by radar_topometric_localization
-git submodule update --init --remote
-```
-
-Reference: https://github.com/utiasASRL/vtr3/wiki/Installation-Guide
-
 ## Download boreas_vtr_wrapper
 
 This package contains testing code for lidar and radar pipeline. Download it do your local filesystem.
 
 ```Bash
-cd ${VTRROOT}
 git clone git@github.com:utiasASRL/boreas_vtr_wrapper.git
 cd boreas_vtr_wrapper
-git checkout aeva_cov_interp
+git checkout script_update
+git submodule update --init --recursive
 ```
 
-## Download pyboreas for evaluation
-
-```Bash
-cd ${VTRROOT}
-git clone git@github.com:utiasASRL/pyboreas.git
-cd pyboreas
-git checkout localization_eval
-```
-
-## Build VTR3 Docker Image
+## Build boreas_vtr_wrapper Docker Image
 
 This builds a image that has all dependencies installed.
 
 ```Bash
-cd ${VTRSRC}
-docker build -t vtr3_<your_name> \
-  --build-arg USERID=$(id -u) \
-  --build-arg GROUPID=$(id -g) \
-  --build-arg USERNAME=$(whoami) \
-  --build-arg HOMEDIR=${HOME} .
+bash scripts/build_docker.sh
 ```
 
-Reference: https://github.com/utiasASRL/vtr3/wiki/EXPERIMENTAL-Running-VTR3-from-a-Docker-Container
+## Start the boreas_vtr_wrapper Docker container
 
-## Start the VTR3 Docker container
-
-Install nvidia docker runtime first: https://nvidia.github.io/nvidia-container-runtime/
+This will either attach to a boreas_vtr_wrapper container that's already running or create a new container which gets deleted upon exit.
 
 ```Bash
-docker run -dit --rm --name vtr3 \
-  --privileged \
-  --network=host \
-  --gpus all \
-  -e DISPLAY=$DISPLAY \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
-  -v ${HOME}:${HOME}:rw \
-  -v ${HOME}/ASRL:${HOME}/ASRL:rw vtr3_<your_name>
+bash scripts/run_docker.sh
 ```
 
-FYI: to start a new terminal with the existing container: `docker exec -it vtr3 bash`
+FYI: This will always run `entrypoint.sh` which tries to source the python venv (see below). Also, the container expects Boreas sequences to be stored at `$VTRRDATA`. If your data is not stored here, then consider mounting a volume in the shell script like `-v host_path:container_path:ro`
 
-Reference: https://github.com/utiasASRL/vtr3/wiki/EXPERIMENTAL-Running-VTR3-from-a-Docker-Container
+## Build and Install VT&R3 + boreas_vtr_wrapper
 
-## Build and Install VT&R3
-
-Start a new terminal and enter the container
+Inside the container
 
 ```Bash
-source /opt/ros/galactic/setup.bash  # source the ROS environment
-cd ${VTRSRC}/main
-colcon build --symlink-install --packages-up-to vtr_lidar vtr_radar vtr_radar_lidar
+bash scripts/build_packages.sh
 ```
 
-wait until it finishes.
-
-## Build and Install boreas_vtr_wrapper (this package)
-
-```Bash
-source /opt/ros/galactic/setup.bash
-source ${VTRSRC}/main/install/setup.bash # source the vtr3 environment
-cd ~/ASRL/boreas_vtr_wrapper # go to where this repo is located
-colcon build --symlink-install
-```
-
-wait until it finishes.
-
-Note that whenever you change any code in the vtr3 repo, you need to re-compile and re-install, do this by re-running the `colcon build ....` command for both vtr3 and then vtr_testing. Always wait until build process on vtr3 finishes before running the build command for vtr_testing.
+If this build is crashing your computer, consider changing `scripts/build_vtr3.sh` and `scripts/build_boreas_vtr_wrapper.sh` to `MAKEFLAGS="-j1"`
 
 ## Create a python venv to install pyboreas
 
-Within the running container, create a virtual environment at `${VTRROOT}`
+Within the running container
 
 ```Bash
-cd ${VTRROOT}
-virtualenv venv
-source venv/bin/activate  # activate this environment
-```
-
-Install pyboreas `localization_eval` branch
-
-```Bash
-cd <where you downloaded pyboreas to>
-pip install -e .
-pip install pyyaml
-pip install pandas
+bash scripts/create_venv.sh
 ```
 
 # Running Experiments
@@ -156,7 +73,7 @@ mkdir -p ${VTRRRESULT}
 ```
 
 ```Bash
-source ${VTRRROOT}/install/setup.bash
+source ${VTRRROOT}/src/install/setup.bash
 # Choose a Teach (ODO_INPUT) and Repeat (LOC_INPUT) run from boreas dataset
 ODO_INPUT=boreas-2020-11-26-13-58
 LOC_INPUT=boreas-2021-01-26-10-59

@@ -9,10 +9,10 @@ ODO_INPUT=$1
 echo "Evaluating localization to reference sequence ${ODO_INPUT}, storing result to ${VTRRRESULT}/${ODO_INPUT}"
 
 # Source the VTR environment with the testing package
-source ${VTRRROOT}/install/setup.bash
+source ${VTRRROOT}/src/install/setup.bash
 source ${VTRROOT}/venv/bin/activate
 
 #   - dump localization result to boreas expected format (txt file)
-python ${VTRRROOT}/src/vtr_testing_lidar/script/boreas_generate_localization_result.py --dataset ${VTRRDATA} --path ${VTRRRESULT}/${ODO_INPUT}
+python ${VTRRROOT}/src/vtr_testing_radar/script/boreas_generate_localization_result.py --dataset ${VTRRDATA} --path ${VTRRRESULT}/${ODO_INPUT}
 #   - evaluate the result using the evaluation script
-python -m pyboreas.eval.localization --gt ${VTRRDATA} --pred ${VTRRRESULT}/${ODO_INPUT}/localization_result --ref_seq ${ODO_INPUT} --ref_sensor lidar --test_sensor lidar --dim 2  --plot ${VTRRRESULT}/${ODO_INPUT}/localization_result/lidar-lidar
+python -m pyboreas.eval.localization --gt ${VTRRDATA} --pred ${VTRRRESULT}/${ODO_INPUT}/localization_result --ref_seq ${ODO_INPUT} --ref_sensor radar --test_sensor radar --dim 2  --plot ${VTRRRESULT}/${ODO_INPUT}/localization_result/radar-radar
