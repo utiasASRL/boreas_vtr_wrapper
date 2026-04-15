@@ -296,6 +296,7 @@ vis = o3d.visualization.VisualizerWithKeyCallback()
 vis.register_key_callback(ord(' '), toggle)
 vis.create_window()
 origin = np.array([0, 0, 2.42])
+# origin = np.array([0, 0, 0])
 frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=5.0, origin=origin)
 vis.add_geometry(frame)
 view_ctl = vis.get_view_control()
@@ -376,7 +377,6 @@ radar_end_ts = None
 
 # Loop through each frame in order (odometry)
 for seq in bd.sequences:
-    seq = bd.sequences[1]
     print(f"SequenceID: {seq.ID}")
 
     # get radar start and end times
@@ -425,10 +425,11 @@ for seq in bd.sequences:
             continue
         
         # Get submap in lidar frame
-        map_pts, intensities = extract_points_from_vertex(curr_submap, msg="pointmap")
+        map_pts = extract_points_from_vertex(curr_submap, msg="pointmap")
         print("-" * 10)
         print(f"map pts shape: {map_pts.shape}")
-        print(f"intensities shape: {intensities.shape}, Max: {np.max(intensities)}, Min: {np.min(intensities)}")
+        print(radar_frame.frame)
+        # print(f"intensities shape: {intensities.shape}, Max: {np.max(intensities)}, Min: {np.min(intensities)}")
         print("-" * 10)
         map_pts = convert_points_to_frame(map_pts, T_lidar_robot)
 
@@ -447,29 +448,30 @@ for seq in bd.sequences:
         elevation = np.arcsin(z_points / r_vals)
 
         valid_mask = (
-            (np.abs(elevation) <= np.deg2rad(5)) 
+            (np.abs(elevation) <= np.deg2rad(1))
+            # (z_points < 1.42)
             # (np.abs(azimuth - np.deg2rad(-110.63574)) <= np.deg2rad(1))
         )
 
         map_pts = map_pts[:, valid_mask]
-        intensities = intensities[valid_mask]
+        # intensities = intensities[valid_mask]
         
         # plot point cloud
         pcd.points = o3d.utility.Vector3dVector(map_pts.T)
 
-        i_min = np.min(intensities)
-        i_max = np.max(intensities)
+        z_min = np.min(z_points)
+        z_max = np.max(z_points)
 
         # avoid divide-by-zero if all points have same height
-        if i_max > i_min:
-            i_norm = (intensities - i_min) / (i_max - i_min)
-            # i_norm = np.power(i_norm, 2.0)
+        if z_max > z_min:
+            z_norm = (z_points - z_min) / (z_max - z_min)
+            z_norm = np.power(z_norm, 2.0)
         else:
-            i_norm = np.zeros_like(intensities)
+            z_norm = np.zeros_like(z_points)
 
         # use matplotlib colormap
-        cmap = plt.get_cmap("turbo")   # or "viridis", "jet"
-        colors = cmap(i_norm)[:, :3]   # drop alpha channel
+        cmap = plt.get_cmap("jet")   # or "viridis", "jet"
+        colors = cmap(z_norm)[:, :3]   # drop alpha channel
         pcd.colors = o3d.utility.Vector3dVector(colors)
 
         # Save depth images

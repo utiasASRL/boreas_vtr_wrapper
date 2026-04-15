@@ -251,14 +251,15 @@ lidar_results_dir = os.path.join(boreas_vtr_wrapper_dir, "results/lidar")
 boreas_data = os.getenv("VTRRDATA") # TODO change to use environment variable
 bd = BoreasDataset(boreas_data)
 
-radar_start_frame = 65
-radar_end_frame = 200
+radar_start_frame = 65 # 65
+radar_end_frame = 1000 # 200
 radar_start_ts = None
 radar_end_ts = None
 
 # Loop through each frame in order (odometry)
 for seq in bd.sequences:
     print(f"SequenceID: {seq.ID}")
+    print(f"Number of Radar Frames: {len(seq.radar_frames)}")
 
     # get radar start and end times
     radar_start_ts = seq.radar_frames[radar_start_frame].frame
@@ -322,6 +323,12 @@ for seq in bd.sequences:
         T_enu_radar = Transformation(T_ba=radar_frame.pose)
         map_pts_enu = convert_points_to_frame(map_pts_lidar, T_enu_lidar) # map_pts in enu frame
 
+        # Range Patch params
+        hfov = np.deg2rad(2.0)
+        vfov = np.deg2rad(2.0)
+        hfov_half = hfov / 2.0
+        vfov_half = vfov / 2.0
+
         t0 = time.perf_counter()
         # naively get map points in each azimuth pose
         map_pts_all = [convert_points_to_frame(map_pts_enu, T_azi) for T_azi in azimuth_transform_poses]
@@ -338,10 +345,6 @@ for seq in bd.sequences:
         el = np.arctan2(z, xy)
 
         # extract small patch of each point cloud
-        hfov = np.deg2rad(2.0)
-        vfov = np.deg2rad(2.0)
-        hfov_half = hfov / 2.0
-        vfov_half = vfov / 2.0
         daz = wrap_to_pi(az - radar_frame.azimuths) # radar_frame.azimuths shape (400, 1); ranges from [-pi, pi]
         patch_mask = (np.abs(daz) <= hfov_half) & (np.abs(el) <= vfov_half)
         patch_pts_all = [pts[i, :, patch_mask[i]] for i in range(pts.shape[0])] # all patches as a list
@@ -459,10 +462,10 @@ for seq in bd.sequences:
 
         patches = np.stack(depth_patches).astype(np.float32)
         shifted_polar = correct_offsets(radar_frame, radar_frame_idx, seq)
-        filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)
+        # filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)
         t1 = time.perf_counter()
 
-        save_patches_and_labels(seq.seq_root, patches, filtered_polar, radar_frame.frame)
+        # save_patches_and_labels(seq.seq_root, patches, shifted_polar, radar_frame.frame)
 
         t2 = time.perf_counter()
         print(f"Elapsed time: {t2 - t0:.6f} s (without save is {t1 - t0:.6f} s)")
