@@ -1,4 +1,5 @@
 import numpy as np
+import math
 from pyboreas import BoreasDataset
 from pyboreas.utils.odometry import interpolate_poses 
 from pyboreas.utils.utils import get_inverse_tf
@@ -29,6 +30,9 @@ from multiprocessing import shared_memory
 
 def wrap_to_pi(angle):
     return (angle + np.pi) % (2 * np.pi) - np.pi
+
+def make_chunks(seq, chunk_size):
+    return [seq[i:i + chunk_size] for i in range(0, len(seq), chunk_size)]
 
 def patch_angles_to_depth_image(
     az_local,
@@ -206,53 +210,53 @@ def cen_filter_2d(polar_image, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5):
     return y
 
 
-def extract_range_image(shm_name, shape, dtype_str, T_azi, radar_azi):
-    # Range Patch params
-    hfov = np.deg2rad(2.0)
-    vfov = np.deg2rad(2.0)
+def extract_range_image_chunk(shm_name, shape, dtype_str, T_azi_chunk, radar_azi_chunk):
+    hfov = np.deg2rad(20.0)
+    vfov = np.deg2rad(20.0)
     hfov_half = hfov / 2.0
     vfov_half = vfov / 2.0
     az_res_deg = 0.1
     el_res_deg = 0.1
-    
+
     existing_shm = shared_memory.SharedMemory(name=shm_name)
     try:
-        T_azi_transform = Transformation(T_ba=T_azi)
         map_pts_enu = np.ndarray(shape, dtype=np.dtype(dtype_str), buffer=existing_shm.buf)
-        map_pts = convert_points_to_frame(map_pts_enu, T_azi_transform)
 
-        # convert to spherical
-        x = map_pts[0, :]
-        y = map_pts[1, :]
-        z = map_pts[2, :]
+        depth_imgs = []
 
-        xy = np.sqrt(x*x + y*y)
-        r  = np.sqrt(x*x + y*y + z*z)
-        az = np.arctan2(y, x)
-        el = np.arctan2(z, xy)
+        for T_azi, radar_azi in zip(T_azi_chunk, radar_azi_chunk):
+            T_azi_transform = Transformation(T_ba=T_azi)
+            map_pts = convert_points_to_frame(map_pts_enu, T_azi_transform)
 
-        # extract small patch of each point cloud
-        daz = wrap_to_pi(az - radar_azi) # radar_azi = radar_frame.azimuths[i]
-        patch_mask = (np.abs(daz) <= hfov_half) & (np.abs(el) <= vfov_half)
-        patch_r = r[patch_mask]
-        patch_az_local = daz[patch_mask]
-        patch_el = el[patch_mask]
+            x = map_pts[0, :]
+            y = map_pts[1, :]
+            z = map_pts[2, :]
 
-        # convert patch of point cloud to range image
-        depth_img = patch_angles_to_depth_image(
-            az_local=patch_az_local,
-            el_local=patch_el,
-            r=patch_r,
-            hfov=hfov,
-            vfov=vfov,
-            az_res_deg=az_res_deg,
-            el_res_deg=el_res_deg,
-            min_range=0.0,
-        )
+            xy = np.sqrt(x * x + y * y)
+            r = np.sqrt(x * x + y * y + z * z)
+            az = np.arctan2(y, x)
+            el = np.arctan2(z, xy)
 
-        return depth_img
+            daz = wrap_to_pi(az - radar_azi)
+            patch_mask = (np.abs(daz) <= hfov_half) & (np.abs(el) <= vfov_half)
+
+            depth_img = patch_angles_to_depth_image(
+                az_local=daz[patch_mask],
+                el_local=el[patch_mask],
+                r=r[patch_mask],
+                hfov=hfov,
+                vfov=vfov,
+                az_res_deg=az_res_deg,
+                el_res_deg=el_res_deg,
+                min_range=0.0,
+            )
+            depth_imgs.append(depth_img)
+
+        return depth_imgs
+
     finally:
         existing_shm.close()
+
 
 def save_patches_and_labels(save_dir, patches, polar, radar_frame):
     # Input Data Directories
@@ -307,8 +311,11 @@ radar_end_frame = 1000 # 200
 radar_start_ts = None
 radar_end_ts = None
 
+max_workers = 4
+num_azimuths = 400
+chunk_size = math.ceil(num_azimuths / max_workers)
 
-with concurrent.futures.ProcessPoolExecutor(max_workers=4) as executor:
+with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
     # Loop through each frame in order (odometry)
     for seq in bd.sequences:
         print(f"SequenceID: {seq.ID}")
@@ -375,40 +382,44 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=4) as executor:
             T_enu_radar = Transformation(T_ba=radar_frame.pose)
             map_pts_enu = convert_points_to_frame(map_pts_lidar, T_enu_lidar) # map_pts in enu frame
 
+            t0 = time.perf_counter()
             # Create shared memory for multiprocessing
+            pose_chunks = make_chunks(azimuth_poses, chunk_size)
+            azi_chunks = make_chunks(radar_frame.azimuths.flatten(), chunk_size)
+
             shm = shared_memory.SharedMemory(create=True, size=map_pts_enu.nbytes)
             shared_arr = np.ndarray(map_pts_enu.shape, dtype=map_pts_enu.dtype, buffer=shm.buf)
             shared_arr[:] = map_pts_enu
-            
-            t0 = time.perf_counter()
-            
+
             try:
-                depth_patches = list(executor.map(
-                    extract_range_image,
-                    [shm.name] * len(azimuth_poses),
-                    [map_pts_enu.shape] * len(azimuth_poses),
-                    [map_pts_enu.dtype.str] * len(azimuth_poses),
-                    azimuth_poses,
-                    radar_frame.azimuths.flatten(),
+                chunk_results = list(executor.map(
+                    extract_range_image_chunk,
+                    [shm.name] * len(pose_chunks),
+                    [map_pts_enu.shape] * len(pose_chunks),
+                    [map_pts_enu.dtype.str] * len(pose_chunks),
+                    pose_chunks,
+                    azi_chunks,
                 ))
             finally:
                 shm.close()
                 shm.unlink()
             
             t1 = time.perf_counter()
+            depth_patches = [img for chunk in chunk_results for img in chunk]
+            patches = np.stack(depth_patches).astype(np.float32)
 
             # for depth_img in depth_patches:
-                ##################
-                # Plot Depth Image
-                ##################
+            #     ##################
+            #     # Plot Depth Image
+            #     ##################
 
-                # plt.figure(figsize=(6, 6))
-                # plt.imshow(depth_img, origin='upper')
-                # plt.colorbar(label='Range / depth')
-                # plt.title("Depth image")
-                # plt.xlabel("Azimuth bin")
-                # plt.ylabel("Elevation bin")
-                # plt.show()
+            #     plt.figure(figsize=(6, 6))
+            #     plt.imshow(depth_img, origin='upper')
+            #     plt.colorbar(label='Range / depth')
+            #     plt.title("Depth image")
+            #     plt.xlabel("Azimuth bin")
+            #     plt.ylabel("Elevation bin")
+            #     plt.show()
 
                 # For video playing in Open3D
                 # if first:
@@ -441,7 +452,6 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=4) as executor:
                 #     vis.update_renderer()
 
 
-            patches = np.stack(depth_patches).astype(np.float32)
             # shifted_polar = correct_offsets(radar_frame, radar_frame_idx, seq)
             # filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)
 
