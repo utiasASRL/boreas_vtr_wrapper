@@ -34,6 +34,10 @@ def wrap_to_pi(angle):
 def make_chunks(seq, chunk_size):
     return [seq[i:i + chunk_size] for i in range(0, len(seq), chunk_size)]
 
+def interpolate_poses_chunk(args):
+    poses, times, query_times_chunk = args
+    return interpolate_poses(poses, times, query_times_chunk)
+
 def patch_angles_to_depth_image(
     az_local,
     el_local,
@@ -125,8 +129,22 @@ def get_submap_vertices(graph_dir):
 
     return test_graph, submap_vertices
 
+def shift_polar_chunk(args):
+    polar_chunk, doppler_chunk = args
+    out = np.empty_like(polar_chunk)
 
-def correct_offsets(radar_frame, radar_frame_idx, seq):
+    # performs doppler shift on chunk
+    for i in range(len(polar_chunk)):
+        out[i] = shift(
+            polar_chunk[i],
+            shift=-doppler_chunk[i],   # negative to undistort
+            order=3,
+            mode='nearest'
+        )
+
+    return out
+
+def correct_offsets(radar_frame, radar_frame_idx, seq, executor=None, max_workers=4):
     prev_radar_frame = seq.radar_frames[radar_frame_idx - 1]
     next_radar_frame = seq.radar_frames[radar_frame_idx + 1]
     body_rates = [prev_radar_frame.body_rate, radar_frame.body_rate, next_radar_frame.body_rate]
@@ -135,28 +153,39 @@ def correct_offsets(radar_frame, radar_frame_idx, seq):
     azimuth_timestamps = radar_frame.timestamps.flatten()
     f = interp1d(times_us, body_rates, axis=0, kind='quadratic')
     azimuth_body_rates = f(azimuth_timestamps) # (400, 6)
-    
+
     # radar_offset
-    shifted_polar = shift(radar_frame.polar, shift=(0, seq.calib.radar_offset / radar_frame.resolution), order=3, mode='nearest')
+    shifted_polar = shift(
+        radar_frame.polar,
+        shift=(0, seq.calib.radar_offset / radar_frame.resolution),
+        order=3,
+        mode='nearest'
+    )
 
     # Doppler Distortion
-    vx = -azimuth_body_rates[:,0] # (400, 1)
-    vy = -azimuth_body_rates[:,1] # (400, 1)
+    vx = -azimuth_body_rates[:, 0]
+    vy = -azimuth_body_rates[:, 1]
     u = vx * np.cos(radar_frame.azimuths) + vy * np.sin(radar_frame.azimuths)
     beta = seq.calib.radar_doppler_beta
     delta_r_d = beta * u
     chirp_sign = np.where(radar_frame.chirp_type == 0, -1, radar_frame.chirp_type)
     doppler_shift = chirp_sign * delta_r_d / radar_frame.resolution # need to SUBTRACT this to get real range
 
-    for idx in range(400):
-        shifted_polar[idx] = shift(
-            shifted_polar[idx],
-            shift=-doppler_shift[idx],   # negative to undistort
-            order=3,
-            mode='nearest'
-        )
+    num_rows = shifted_polar.shape[0]
+    chunk_size = math.ceil(num_rows / max_workers)
 
-    return shifted_polar
+    polar_chunks = [shifted_polar[i:i + chunk_size] for i in range(0, num_rows, chunk_size)]
+    doppler_chunks = [doppler_shift[i:i + chunk_size] for i in range(0, num_rows, chunk_size)]
+
+    args = list(zip(polar_chunks, doppler_chunks))
+
+    if executor is None:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as ex:
+            chunk_results = list(ex.map(shift_polar_chunk, args))
+    else:
+        chunk_results = list(executor.map(shift_polar_chunk, args))
+
+    return np.vstack(chunk_results)
 
 def cen_filter_2d(polar_image, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5):
     """
@@ -210,13 +239,13 @@ def cen_filter_2d(polar_image, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5):
     return y
 
 
-def extract_range_image_chunk(shm_name, shape, dtype_str, T_azi_chunk, radar_azi_chunk):
-    hfov = np.deg2rad(20.0)
-    vfov = np.deg2rad(20.0)
+def extract_range_image_chunk(shm_name, shape, dtype_str, T_azi_chunk, radar_azi_chunk, fov_deg, res):
+    hfov = np.deg2rad(fov_deg)
+    vfov = np.deg2rad(fov_deg)
     hfov_half = hfov / 2.0
     vfov_half = vfov / 2.0
-    az_res_deg = 0.1
-    el_res_deg = 0.1
+    az_res_deg = res
+    el_res_deg = res
 
     existing_shm = shared_memory.SharedMemory(name=shm_name)
     try:
@@ -258,42 +287,44 @@ def extract_range_image_chunk(shm_name, shape, dtype_str, T_azi_chunk, radar_azi
         existing_shm.close()
 
 
-def save_patches_and_labels(save_dir, patches, polar, radar_frame):
+def save_patches(seq_dir, patches, fov, radar_frame):
     # Input Data Directories
-    input_dir = Path(save_dir + "/input")
-    array_save_dir = input_dir / "patch_arrays_2_deg_no_interp" # 32 bit array (more precision)
-    
-    # Polar Label Directories
-    labels_dir = Path(save_dir + "/labels")
-
+    input_dir = Path(seq_dir + "/input")
+    array_save_dir = input_dir / f"patch_arrays_{fov}_deg" # 32 bit array (more precision)
     array_save_dir.mkdir(parents=True, exist_ok=True)
-    labels_dir.mkdir(parents=True, exist_ok=True)
     np.save(array_save_dir / f"{radar_frame}.npy", patches)
+    return
+
+def save_labels(seq_dir, folder_name, polar, radar_frame):
+    # Polar Label Directories
+    labels_dir = Path(seq_dir + f"/{folder_name}")
+    labels_dir.mkdir(parents=True, exist_ok=True)
     np.save(labels_dir / f"{radar_frame}.npy", polar)
     return
+    
 
 ######################
 # Point Cloud Plotting
 ######################
 
-first = True
-paused = False
-def toggle(vis):
-    global paused
-    paused = not paused
-    return False
+# first = True
+# paused = False
+# def toggle(vis):
+#     global paused
+#     paused = not paused
+#     return False
 
-vis = o3d.visualization.VisualizerWithKeyCallback()
-vis.register_key_callback(ord(' '), toggle)
-vis.create_window()
-origin = np.array([0, 0, 0])
-frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=5.0, origin=origin)
-vis.add_geometry(frame)
-view_ctl = vis.get_view_control()
+# vis = o3d.visualization.VisualizerWithKeyCallback()
+# vis.register_key_callback(ord(' '), toggle)
+# vis.create_window()
+# origin = np.array([0, 0, 0])
+# frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=5.0, origin=origin)
+# vis.add_geometry(frame)
+# view_ctl = vis.get_view_control()
 
-pcd = o3d.geometry.PointCloud()
-vis.poll_events()
-vis.update_renderer()
+# pcd = o3d.geometry.PointCloud()
+# vis.poll_events()
+# vis.update_renderer()
 
 #######################
 # MAIN
@@ -311,8 +342,10 @@ radar_end_frame = 1000 # 200
 radar_start_ts = None
 radar_end_ts = None
 
-max_workers = 4
+max_workers = 12
 num_azimuths = 400
+fov_deg = 20.0
+res = 0.1
 chunk_size = math.ceil(num_azimuths / max_workers)
 
 with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -349,6 +382,7 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor
         submap_vertices_idx = 0
         radar_frame_idx = radar_start_frame
         while (submap_vertices_idx < len(submap_vertices) - 1 and lidar_frame_idx < len(seq.lidar_frames) and radar_frame_idx < radar_end_frame + 1):
+            t0 = time.perf_counter()
             curr_submap = submap_vertices[submap_vertices_idx]
             next_submap = submap_vertices[submap_vertices_idx + 1]
             radar_frame = seq.radar_frames[radar_frame_idx]
@@ -371,7 +405,11 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor
             poses = [get_inverse_tf(rad_frame.pose) for rad_frame in seq.radar_frames[radar_frame_idx - 1: radar_frame_idx + 2]] # rad_frame.pose is T_enu_radar but interpolate_poses needs T_radar_enu!
             times = [rad_frame.timestamp_micro for rad_frame in seq.radar_frames[radar_frame_idx - 1: radar_frame_idx + 2]]
             query_times = radar_frame.timestamps.flatten().tolist()
-            azimuth_poses = interpolate_poses(poses, times, query_times) # T_radar_enu
+            query_time_chunks = make_chunks(query_times, math.ceil(len(query_times) / max_workers))
+            
+            args = [(poses, times, chunk) for chunk in query_time_chunks]
+            chunk_results = list(executor.map(interpolate_poses_chunk, args))
+            azimuth_poses = [pose for chunk in chunk_results for pose in chunk]
             
             # Get submap in lidar frame
             map_pts_robot = extract_points_from_vertex(curr_submap, msg="pointmap")
@@ -382,7 +420,6 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor
             T_enu_radar = Transformation(T_ba=radar_frame.pose)
             map_pts_enu = convert_points_to_frame(map_pts_lidar, T_enu_lidar) # map_pts in enu frame
 
-            t0 = time.perf_counter()
             # Create shared memory for multiprocessing
             pose_chunks = make_chunks(azimuth_poses, chunk_size)
             azi_chunks = make_chunks(radar_frame.azimuths.flatten(), chunk_size)
@@ -399,12 +436,13 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor
                     [map_pts_enu.dtype.str] * len(pose_chunks),
                     pose_chunks,
                     azi_chunks,
+                    [fov_deg] * len(pose_chunks), 
+                    [res] * len(pose_chunks)
                 ))
             finally:
                 shm.close()
                 shm.unlink()
             
-            t1 = time.perf_counter()
             depth_patches = [img for chunk in chunk_results for img in chunk]
             patches = np.stack(depth_patches).astype(np.float32)
 
@@ -451,11 +489,21 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor
                 #     vis.poll_events()
                 #     vis.update_renderer()
 
+            shifted_polar = correct_offsets(
+                radar_frame, 
+                radar_frame_idx, 
+                seq, 
+                executor=executor, 
+                max_workers=max_workers)
+            
+            filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)            
 
-            # shifted_polar = correct_offsets(radar_frame, radar_frame_idx, seq)
-            # filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)
+            t1 = time.perf_counter()
 
-            # save_patches_and_labels(seq.seq_root, patches, shifted_polar, radar_frame.frame)
+            save_patches(seq_dir=seq.seq_root, patches=patches, fov=fov_deg, radar_frame=radar_frame.frame)
+            save_labels(seq_dir=seq.seq_root, folder_name="labels", polar=shifted_polar, radar_frame=radar_frame.frame)
+            save_labels(seq_dir=seq.seq_root, folder_name="filtered_labels", polar=filtered_polar, radar_frame=radar_frame.frame)
+
 
             t2 = time.perf_counter()
             print(f"Elapsed time: {t2 - t0:.6f} s (without save is {t1 - t0:.6f} s)")
@@ -465,22 +513,22 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor
             print(f"map pts shape: {map_pts.shape}")
             print("-" * 10)
 
-            # plot point cloud patch
-            pcd.points = o3d.utility.Vector3dVector(map_pts.T)
-            pcd.paint_uniform_color((0.1*curr_submap.run, 0.25*curr_submap.run, 0.45))
-            colors = np.asarray(pcd.colors)
+            # # plot point cloud patch
+            # pcd.points = o3d.utility.Vector3dVector(map_pts.T)
+            # pcd.paint_uniform_color((0.1*curr_submap.run, 0.25*curr_submap.run, 0.45))
+            # colors = np.asarray(pcd.colors)
 
-            # For video playing in Open3D
-            if first:
-                first = False
-                paused = True
-                vis.add_geometry(pcd)
-            else:
-                vis.update_geometry(pcd)
-            t = time.time()
-            while time.time() - t < 0.1 or paused:
-                vis.poll_events()
-                vis.update_renderer()
+            # # For video playing in Open3D
+            # if first:
+            #     first = False
+            #     paused = True
+            #     vis.add_geometry(pcd)
+            # else:
+            #     vis.update_geometry(pcd)
+            # t = time.time()
+            # while time.time() - t < 0.1 or paused:
+            #     vis.poll_events()
+            #     vis.update_renderer()
 
             radar_frame.unload_data()
             print("radar frame unloaded!")
