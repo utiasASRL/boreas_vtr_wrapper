@@ -410,6 +410,7 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor
             args = [(poses, times, chunk) for chunk in query_time_chunks]
             chunk_results = list(executor.map(interpolate_poses_chunk, args))
             azimuth_poses = [pose for chunk in chunk_results for pose in chunk]
+            t1 = time.perf_counter()
             
             # Get submap in lidar frame
             map_pts_robot = extract_points_from_vertex(curr_submap, msg="pointmap")
@@ -489,6 +490,7 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor
                 #     vis.poll_events()
                 #     vis.update_renderer()
 
+            t2 = time.perf_counter()
             shifted_polar = correct_offsets(
                 radar_frame, 
                 radar_frame_idx, 
@@ -498,15 +500,15 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor
             
             filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)            
 
-            t1 = time.perf_counter()
+            t3 = time.perf_counter()
 
             save_patches(seq_dir=seq.seq_root, patches=patches, fov=fov_deg, radar_frame=radar_frame.frame)
             save_labels(seq_dir=seq.seq_root, folder_name="labels", polar=shifted_polar, radar_frame=radar_frame.frame)
             save_labels(seq_dir=seq.seq_root, folder_name="filtered_labels", polar=filtered_polar, radar_frame=radar_frame.frame)
 
 
-            t2 = time.perf_counter()
-            print(f"Elapsed time: {t2 - t0:.6f} s (without save is {t1 - t0:.6f} s)")
+            t4 = time.perf_counter()
+            print(f"Elapsed time: {t4 - t0:.6f} s | Pose Interpolation: {t1 - t0:.6f} s | Extract Depth Patches: {t2 - t1:.6f} s | Polar Corrections: {t3 - t2:.6f} s | Saving: {t4 - t3:.6f} s ")
 
             map_pts = convert_points_to_frame(map_pts_enu, T_enu_radar)
             print("-" * 10)
