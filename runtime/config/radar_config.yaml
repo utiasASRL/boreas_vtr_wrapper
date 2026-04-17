@@ -3,23 +3,23 @@
     ############ system configuration ############
     # Data logging
     log_to_file: true
-    log_debug: false
+    log_debug: true
     log_enabled: [
         ## ADD LOGGER IDS HERE
         # tactic
         # "tactic",
         # "tactic.pipeline",
-        # "tactic.module",
+        "tactic.module",
         # "tactic.module.live_mem_manager",
         # "tactic.module.graph_mem_manager",
         # pipeline specific
         "radar.pipeline",
         # "radar.pc_extractor",
-        # "radar.doppler_extractor",
+        "radar.doppler_extractor",
         # "radar.conversion",
         # "radar.preprocessing",
         # "radar.mcransac",
-        "radar.odometry_icp",
+        # "radar.odometry_icp",
         # "radar.odometry_gt",
         # "radar.odometry_wheel",
         "radar.odometry_doppler",
@@ -65,7 +65,7 @@
       save_odometry_result: true
       save_odometry_vel_result: true
       save_localization_result: true
-      visualize: false
+      visualize: true
 
       rviz_loc_path_offset: [0., 0., 0.]
 
@@ -76,17 +76,17 @@
       preprocessing: [
           # preprocessing thread modules
           "conversion",
+          "doppler_extraction",
           "extraction",
           "filtering",
-          # "doppler_extraction"
         ]
 
       odometry: [
           # odometry and mapping thread modules
           # "mcransac",
-          "icp",
+          # "icp",
           # "gt",
-          # "doppler",
+          "doppler",
           # "wheel",
           "mapping",
           "vertex_test",
@@ -141,7 +141,7 @@
           threshold: 12.5
           static_threshold: 0.3
 
-        visualize: false
+        visualize: true
 
       doppler_extraction:
         type: radar.doppler_extractor
@@ -155,13 +155,14 @@
           max_range: 200.0  # m, maximum range of signal to use in cross-correlation
           beta_corr_fact: 0.944 # _, correction factor for beta
           pad_num: 100     # _, number of zeros to pad the signal with
+          max_velocity: 30.0  # m/s, maximum velocity before deeming Doppler extraction invalid
         filter:
           sigma_gauss: 15.0 # _, standard deviation of Gaussian filter
           z_q: 2.5       # _, threshold for Cen2018 detector
         ransac:
           max_iter: 100
-          threshold: 6.0
-          prior_threshold: 6.0
+          threshold: 2.0
+          prior_threshold: 2.0
         optimization:
           max_iter: 100
           threshold: 1.0E-6
@@ -170,6 +171,7 @@
           x_bias_intercept: 0.10 # m/s, intercept of the bias correction in x direction
           y_bias_slope: 0.046 # m/s, slope of the bias correction in y direction
           y_bias_intercept: -0.11 # m/s, intercept of the bias correction in y direction
+          prior_threshold: 6.0 # m/s, threshold for rejecting velocity estimates that deviate too much from the prior
 
 
       filtering:
@@ -187,7 +189,7 @@
         num_sample_linearity: 5000 # max number of sample after filtering based on linearity
         min_linearity_score: -1.0 # min linearity score (negative value means no filtering)
 
-        visualize: false
+        visualize: true
 
     odometry:
       mcransac:
@@ -204,7 +206,7 @@
         # BASD
         nbins: 16
         bin_size: 1
-        visualize: false
+        visualize: true
         filter_pc: false
         init_icp: false
 
@@ -217,24 +219,15 @@
       doppler:
         type: radar.odometry_doppler
         num_threads: 1
-        traj_qc_diag: [1.0, 0.01, 0.001]
         zero_velocity_threshold: 0.4
-        optimize: false
-        max_iter: 10
-        verbose: false
-        dopp_cauchy_k: 1.0
-        dopp_meas_std: 0.2
-        doppler_bias: [0.10, -0.11] # [x_bias, y_bias] in m/s
-        gyro_cov: 1e-6
-        integration_steps: 20
-        traj_num_extra_states: 20
+        traj_qc_diag: [1.0, 0.01, 0.001]
 
       icp:
         type: radar.odometry_icp
 
         # continuous time estimation
         traj_num_extra_states: 0
-        traj_qc_diag: [1.0, 0.001, 0.001]
+        traj_qc_diag: [1.0, 0.1, 0.001]
 
         # ICP parameters
         num_threads: 1
@@ -258,11 +251,12 @@
         estimate_gyro_bias: false
 
         # Doppler velocity parameters
-        use_vel_meas: false
-        dopp_cauchy_k: 1.0
+        use_vel_meas: true
+        dopp_cauchy_k: 100.0
         dopp_meas_std: 0.2
-        vel_fwd_std: 0.6  # 0.6 for N1, 0.4 for N2
-        vel_side_std: 1.2 # 1.2 for N1, 1.0 for N2
+        zero_velocity_threshold: 0.4
+        vel_fwd_std: 0.2  # 0.6 for N1, 0.4 for N2
+        vel_side_std: 0.6 # 1.2 for N1, 1.0 for N2
         doppler_bias: [0.10, -0.11] # [x_bias, y_bias] in m/s
 
         # steam parameters
@@ -272,7 +266,7 @@
         # threshold
         min_matched_ratio: 0.0
 
-        visualize: false
+        visualize: true
 
       wheel:
         type: radar.odometry_wheel
@@ -287,7 +281,7 @@
         wheel_parameter: 0.00052201 # 0.00052229 
         wheel_cov: [0.001, 0.001, 0.001, 1e-7, 1e-7, 1e-7]
 
-        visualize: false
+        visualize: true
 
       mapping:
         type: radar.odometry_map_maintenance
@@ -299,7 +293,7 @@
 
         point_life_time: 3.0 # point life time based on number of map updates
 
-        visualize: false
+        visualize: true
 
       vertex_test:
         type: radar.vertex_test
@@ -318,7 +312,7 @@
 
         map_version: "pointmap"
 
-        visualize: false
+        visualize: true
 
       icp:
         type: radar.localization_icp
