@@ -338,13 +338,13 @@ boreas_data = os.getenv("VTRRDATA") # TODO change to use environment variable
 bd = BoreasDataset(boreas_data)
 
 radar_start_frame = 65 # 65
-radar_end_frame = 1000 # 200
+radar_end_frame = 200 # 200
 radar_start_ts = None
 radar_end_ts = None
 
-max_workers = 12
+max_workers = 4
 num_azimuths = 400
-fov_deg = 20.0
+fov_deg = 2.0
 res = 0.1
 chunk_size = math.ceil(num_azimuths / max_workers)
 
@@ -503,8 +503,8 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor
             t3 = time.perf_counter()
 
             save_patches(seq_dir=seq.seq_root, patches=patches, fov=fov_deg, radar_frame=radar_frame.frame)
-            save_labels(seq_dir=seq.seq_root, folder_name="labels", polar=shifted_polar, radar_frame=radar_frame.frame)
-            save_labels(seq_dir=seq.seq_root, folder_name="filtered_labels", polar=filtered_polar, radar_frame=radar_frame.frame)
+            # save_labels(seq_dir=seq.seq_root, folder_name="labels", polar=shifted_polar, radar_frame=radar_frame.frame)
+            # save_labels(seq_dir=seq.seq_root, folder_name="filtered_labels", polar=filtered_polar, radar_frame=radar_frame.frame)
 
 
             t4 = time.perf_counter()
