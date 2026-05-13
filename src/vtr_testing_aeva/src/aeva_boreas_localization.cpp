@@ -211,7 +211,7 @@ int main(int argc, char **argv) {
   T_lid_world_gt.reserve(files.size());
   v_lid_gt.reserve(files.size());
   if (load_gt) {
-    load_lidar_groundtruth(odo_dir, T_lid_world_gt, v_lid_gt, "aeva");
+    load_lidar_groundtruth(loc_dir, T_lid_world_gt, v_lid_gt, "aeva");
     CLOG(WARNING, "boreas_wrapper") << "Loaded groundtruth for " << T_lid_world_gt.size() << " frames";
   }
 
@@ -256,7 +256,7 @@ int main(int argc, char **argv) {
     // Feed in IMU data if available/desired
     std::vector<sensor_msgs::msg::Imu> gyro_msgs;
     if (use_imu) {
-      int64_t start_timestamp = points(0, 5);
+      int64_t start_timestamp = timestamp;
       int64_t end_timestamp = std::min(static_cast<int64_t>(points(points.rows() - 1, 5)), 
                                        timestamp + offset_ns);
 
@@ -284,7 +284,7 @@ int main(int argc, char **argv) {
     // Feed in wheel encoder data if available/desired
     std::vector<std::pair<rclcpp::Time, double>> wheel_meas;
     if (use_wheel_encoder) {
-      int64_t start_timestamp = points(0, 5);
+      int64_t start_timestamp = timestamp;
       int64_t end_timestamp = std::min(static_cast<int64_t>(points(points.rows() - 1, 5)), 
                                        timestamp + offset_ns);
 

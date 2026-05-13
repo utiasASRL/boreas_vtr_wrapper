@@ -201,7 +201,7 @@ int main(int argc, char **argv) {
     // Feed in IMU data if available/desired
     std::vector<sensor_msgs::msg::Imu> gyro_msgs;
     if (use_imu) {
-      int64_t start_timestamp = points(0, 5);
+      int64_t start_timestamp = timestamp;
       int64_t end_timestamp = std::min(static_cast<int64_t>(points(points.rows() - 1, 5)), 
                                        timestamp + offset_ns);
 
@@ -229,7 +229,7 @@ int main(int argc, char **argv) {
     // Feed in wheel encoder data if available/desired
     std::vector<std::pair<rclcpp::Time, double>> wheel_meas;
     if (use_wheel_encoder) {
-      int64_t start_timestamp = points(0, 5);
+      int64_t start_timestamp = timestamp;
       int64_t end_timestamp = std::min(static_cast<int64_t>(points(points.rows() - 1, 5)), 
                                        timestamp + offset_ns);
       if (wheel_counter == 0) {
