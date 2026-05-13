@@ -117,16 +117,16 @@
         vertical_angle_res: 0.00349066  # vertical angle resolution in radians (0.2 deg)
         polar_r_scale: 2.0              # polar_r_scale x vertical_angle_res = nearest neighbor search radius for normal computation
         r_scale: 4.0                    # scale down point range by this value after taking log, whatever works
-        h_scale: 0.25                   # scale down yaw(phi) by this value so that vertical resolution ~= horizontal resolution (0.05/0.2 = 0.25)
+        h_scale: 4.0                   # scale down yaw(phi) by this value so that vertical resolution ~= horizontal resolution (0.05/0.2 = 0.25)
         #
-        num_sample1: 5000               # max number of sample after filtering based on planarity
+        num_sample1: 10000               # max number of sample after filtering based on planarity
         min_norm_score1: 0.95           # min planarity score
-        num_sample2: 5000               # max number of sample after filtering based on planarity
+        num_sample2: 10000               # max number of sample after filtering based on planarity
         min_norm_score2: 0.0            # 0.2 is when the incident angle 5/12 * pi
         min_normal_estimate_dist: 2.0   # minimum distance to estimate normal in meters
         max_normal_estimate_angle: 0.42 # must <1/2, this value will be timed by M_PI
         #
-        cluster_num_sample: 5000        # max number of sample after removing isolated points
+        cluster_num_sample: 10000        # max number of sample after removing isolated points
         min_points_threshold: 0         # min number of points to be considered as valid scan, set to 0 to disable
         #
         visualize: false
@@ -141,8 +141,8 @@
         #
         num_rows: 64                    # num of vertical scan lines
         num_cols: 601                   # 120 deg FOV, 0.2 deg resolution
-        min_dist: 5.0                   # meters
-        max_dist: 100.0                 # meters
+        min_dist: 0.0                   # meters
+        max_dist: 150.0                  # meters
         #
         root_path: "/home/katya/Documents/Data/sensor_config/boreas_aeries_ii/doppler_bias"
         bias_input_feat: ["range", "intensity", "medianrv"]
@@ -219,12 +219,15 @@
         prior_threshold: 3.0        # m/s
         integration_steps: 100
         zero_vel_tol: 0.03
-        gyro_cov: [0.00005475, 0.00008683, 0.00002507] # good
+        # gyro_cov: [0.00005475, 0.00008683, 0.00002507] # aeva imu
+        gyro_cov: [1e-4, 1e-4, 1e-4] # dmu imu
         estimate_bias: false
         # inits
         P0inv: [1e4, 1e4, 1e4, 1e6, 1e6, 1e6]
-        Qkinv: [124.097194, 852.430330017, 448.704299478, 1128.19639192, 1230.02908934, 11316.9459369]
-        Qzinv: [0.0, 100.0, 100.0, 33271.2755284, 20032.1558168, 0.0]
+        # Qkinv: [124.097194, 852.430330017, 448.704299478, 1128.19639192, 1230.02908934, 11316.9459369]
+        # Qzinv: [0.0, 100.0, 100.0, 33271.2755284, 20032.1558168, 0.0]
+        Qkinv: [124.0, 1200.0, 448.0, 2700.0, 3800.0, 4000.0]
+        Qzinv: [0.0, 100.0, 100.0, 1000.0, 1000.0, 0.0]
         # thresholds
         max_trans_vel_diff: 1.0     # m/s
 
