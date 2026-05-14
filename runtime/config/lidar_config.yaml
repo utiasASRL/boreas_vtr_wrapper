@@ -33,7 +33,7 @@
         use_imu: true
         imu_name: "dmu" # options are "dmu", "aeva", or "imu" (for applanix imu)
       wheel_encoder:
-        use_wheel_encoder: false
+        use_wheel_encoder: true
         encoder_max: 16777216 # 2^24
       odometry:
         start_frame: 0  # start frame for odometry
@@ -77,9 +77,9 @@
 
       odometry: [
           # odometry and mapping thread modules
-          "icp",
+          # "icp",
           # "gt",
-          # "wheel",
+          "wheel",
           "mapping",
           "vertex_test",
           "memory",
@@ -172,15 +172,16 @@
       wheel:
         type: lidar.odometry_wheel
 
-        num_threads: 1
+        num_threads: 10
 
         # wheel odometry parameters       
         potentially_slipping: true
-        estimate_bias: true
+        estimate_bias: false
         bias_alpha: 0.005
         min_time_bias_count: 200.0   # 1 / median time diff between IMU measurements (applanix ~200Hz)
         # wheel_parameter: 0.00052229 
-        wheel_parameter: 0.00052201
+        # wheel_parameter: 0.00052201
+        wheel_parameter: 0.00052217
 
         visualize: false
 
