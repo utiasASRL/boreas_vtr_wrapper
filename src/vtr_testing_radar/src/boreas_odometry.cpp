@@ -226,6 +226,7 @@ int main(int argc, char **argv) {
         gyro_msgs.push_back(gyro_msg);
         ++imu_counter;
       }
+      CLOG(WARNING, "boreas_wrapper") << "Loaded " << gyro_msgs.size() << " gyro measurements";
     }
 
     // Feed in wheel encoder data if available/desired
