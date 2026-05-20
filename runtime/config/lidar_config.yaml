@@ -34,7 +34,12 @@
         imu_name: "dmu" # options are "dmu", "aeva", or "imu" (for applanix imu)
       wheel_encoder:
         use_wheel_encoder: true
+        use_new_calibration: true
         encoder_max: 16777216 # 2^24
+        T_wheel_applanix: [0.99950704, -0.02938837, -0.01103585, 0.82959465,
+                           0.02932775,  0.99955397, -0.00561516, 0.42203954,
+                           0.01119595,  0.00528874,  0.99992334, 1.62164943,
+                           0.0,         0.0,         0.0,        1.0]  # row-major 4x4 T matrix
       odometry:
         start_frame: 0  # start frame for odometry
         end_frame: -1   # -1 means process all frames
@@ -109,7 +114,7 @@
       filtering:
         type: lidar.preprocessing
 
-        num_threads: 1
+        num_threads: 10
 
         crop_range: 80.0
         frame_voxel_size: 1.0 # grid subsampling voxel size
@@ -181,7 +186,7 @@
         min_time_bias_count: 200.0   # 1 / median time diff between IMU measurements (applanix ~200Hz)
         # wheel_parameter: 0.00052229 
         # wheel_parameter: 0.00052201
-        wheel_parameter: 0.00052217
+        wheel_parameter: 0.0005220899704141285
 
         visualize: false
 

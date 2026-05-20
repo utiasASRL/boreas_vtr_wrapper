@@ -93,13 +93,19 @@ int main(int argc, char **argv) {
 
   // Load wheel encoder data
   const auto use_wheel_encoder = node->declare_parameter<bool>("boreas.wheel_encoder.use_wheel_encoder", false);
+  const auto use_new_calibration = node->declare_parameter<bool>("boreas.wheel_encoder.use_new_calibration", false);
   const auto encoder_max = node->declare_parameter<int>("boreas.wheel_encoder.encoder_max", 16777216);
   CLOG(WARNING, "boreas_wrapper") << "Wheel encoder enabled: " << use_wheel_encoder;
   std::vector<std::pair<int64_t, int64_t>> all_wheel_meas;
   EdgeTransform T_wheel_robot; 
   if (use_wheel_encoder) {
     load_wheel_encoder_data(odo_dir, encoder_max, all_wheel_meas);
-    T_wheel_robot = load_T_wheel_robot(odo_dir);
+    Eigen::Matrix4d T_wa = load_T_wheel_applanix(odo_dir, false);
+    if (use_new_calibration) {
+      const auto v = node->declare_parameter<std::vector<double>>("boreas.wheel_encoder.T_wheel_applanix");
+      T_wa = Eigen::Map<const Eigen::Matrix<double, 4, 4, Eigen::RowMajor>>(v.data());
+    }
+    T_wheel_robot = load_T_wheel_robot(odo_dir, T_wa);
 
     CLOG(WARNING, "boreas_wrapper") << "Loaded " << all_wheel_meas.size() << " wheel measurements";
     CLOG(WARNING, "boreas_wrapper") << "Transform from wheel to robot has been set to:\n" << T_wheel_robot;

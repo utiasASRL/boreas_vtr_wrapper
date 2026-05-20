@@ -180,12 +180,16 @@ inline EdgeTransform load_T_imu_robot(const fs::path &path, const std::string &i
     return T_robot_imu.inverse();
 }
 
-inline EdgeTransform load_T_wheel_robot(const fs::path &path) {
-    Eigen::Matrix4d T_wheel_applanix = load_T_wheel_applanix(path, false);
+inline EdgeTransform load_T_wheel_robot(const fs::path &path, const Eigen::Matrix4d T_wheel_applanix) {
+    CLOG(WARNING, "boreas_wrapper") << "Transform from wheel to applanix has been set to:\n" << T_wheel_applanix;
     Eigen::Matrix4d T_robot_applanix = load_T_wheel_applanix(path, true);
     EdgeTransform T_wheel_robot(Eigen::Matrix4d(T_wheel_applanix * T_robot_applanix.inverse()),
                                 Eigen::Matrix<double, 6, 6>::Zero());
     return T_wheel_robot;
+}
+
+inline EdgeTransform load_T_wheel_robot(const fs::path &path) {
+    return load_T_wheel_robot(path, load_T_wheel_applanix(path, false));
 }
 
 inline EdgeTransform load_T_enu_init(const fs::path &path, const bool &reverse, const std::string &sensor="lidar") {
