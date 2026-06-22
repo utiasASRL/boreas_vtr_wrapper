@@ -7,7 +7,7 @@ ODO_INPUT=$1
 if [ $# -eq 2 ]; then
   PARAM_FILE=$2
 else
-  PARAM_FILE=${VTRRROOT}/src/vtr_testing_aeva/config/aeva_boreas.yaml
+  PARAM_FILE=${VTRRROOT}/runtime/config/aeva_config.yaml
 fi
 
 # Log

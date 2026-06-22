@@ -19,20 +19,27 @@
         # "lidar.preprocessing",
         # "lidar.preprocessing_doppler",
         # "lidar.odometry_icp",
-        "lidar.odometry_doppler",
+        # "lidar.odometry_wheel",
+        # "lidar.odometry_doppler",
         # "lidar.odometry_map_maintenance",
         # "lidar.vertex_test",
         # "lidar.localization_map_recall",
         # "lidar.localization_icp",
       ]
-    ############ boreas data configuration ############
+    ############ Boreas data configuration ############
     boreas:
+      load_gt: false
       imu:
         use_imu: true
-        imu_name: "aeva" # options are "dmu", "aeva", or "imu" (for applanix imu)
+        imu_name: "dmu" # options are "dmu", "aeva", or "imu" (for applanix imu)
+      wheel_encoder:
+        use_wheel_encoder: true
+        encoder_max: 16777216 # 2^24
       odometry:
         start_frame: 0  # start frame for odometry
         end_frame: -1   # -1 means process all frames
+      localization:
+        reverse: false  # Whether to localize against a reversed map
 
     ############ tactic configuration ############
     tactic:
@@ -47,7 +54,7 @@
       chain:
         min_cusp_distance: 1.5
         angle_weight: 7.0
-        search_depth: 5
+        search_depth: 20
         search_back_depth: 10
         distance_warning: 30.0
 
@@ -68,14 +75,16 @@
       preprocessing: [
           # preprocessing thread modules
           "conversion",
-          #"filtering",
-          "doppler_filtering",
+          "filtering",
+          #"doppler_filtering",
         ]
 
       odometry: [
           # odometry and mapping thread modules
-          # "icp",
-          "doppler", 
+          #"gt",
+          #"icp",
+          "wheel",
+          #"doppler", 
           "mapping",
           "vertex_test",
           "memory",
@@ -101,143 +110,160 @@
       filtering:
         type: lidar.preprocessing
         num_threads: 10
-
-        crop_range: 100.0
+        #
+        crop_range: 80.0
+        frame_voxel_size: 1.0           # grid subsampling voxel size
         # 
-        vertical_angle_res: 0.00349066 # vertical angle resolution in radians (0.12 deg w/ 30 vertical FOV)
-        polar_r_scale: 2.0 # 1.0 # polar_r_scale x vertical_angle_res = nearest neighbor search radius for normal computation
-        r_scale: 4.0 # scale down point range by this value after taking log, whatever works
-        h_scale: 0.25 # scale down yaw(phi) by this value so that vertical resolution ~= horizontal resolution
+        vertical_angle_res: 0.00349066  # vertical angle resolution in radians (0.2 deg)
+        polar_r_scale: 2.0              # polar_r_scale x vertical_angle_res = nearest neighbor search radius for normal computation
+        r_scale: 4.0                    # scale down point range by this value after taking log, whatever works
+        h_scale: 0.25                   # scale down yaw(phi) by this value so that vertical resolution ~= horizontal resolution (0.05/0.2 = 0.25)
         #
-        frame_voxel_size: 1.0 # grid subsampling voxel size
-        filter_normal: true
-        #
-        num_sample1: 5000 # max number of sample after filtering based on planarity
-        min_norm_score1: 0.95 # min planarity score
-        #
-        num_sample2: 5000 # max number of sample after filtering based on planarity
-        min_norm_score2: 0.0 # 0.2 is when the incident angle 5/12 * pi
-        min_normal_estimate_dist: 2.0 # minimum distance to estimate normal in meters
+        num_sample1: 5000               # max number of sample after filtering based on planarity
+        min_norm_score1: 0.95           # min planarity score
+        num_sample2: 5000               # max number of sample after filtering based on planarity
+        min_norm_score2: 0.0            # 0.2 is when the incident angle 5/12 * pi
+        min_normal_estimate_dist: 2.0   # minimum distance to estimate normal in meters
         max_normal_estimate_angle: 0.42 # must <1/2, this value will be timed by M_PI
         #
-        cluster_num_sample: 5000 # max number of sample after removing isolated points
-        min_points_threshold: 0 # min number of points to be considered as valid scan, set to 0 to disable
-
+        cluster_num_sample: 5000        # max number of sample after removing isolated points
+        min_points_threshold: 0         # min number of points to be considered as valid scan, set to 0 to disable
+        #
         visualize: false
 
       doppler_filtering:
         type: lidar.preprocessing_doppler
         num_threads: 1
-        # aeriesII
+        #
         azimuth_res: 0.00349066         # vertical angle resolution in radians
         azimuth_start: -0.994838        # -57 deg in rad         
         azimuth_end: 1.09956            #  63 deg in rad
+        #
         num_rows: 64                    # num of vertical scan lines
         num_cols: 601                   # 120 deg FOV, 0.2 deg resolution
-        min_dist: 5.0                  # meters
+        min_dist: 5.0                   # meters
         max_dist: 100.0                 # meters
-        root_path: "/home/katya/Documents/Data/sensor_config/boreas_aeries_ii/hwy7"
-        downsample_steps: 2                                                   # after image projection 
+        #
+        root_path: "/home/katya/Documents/Data/sensor_config/boreas_aeries_ii/doppler_bias"
         bias_input_feat: ["range", "intensity", "medianrv"]
         var_input_feat: ["intensity", "medianrv", "rv_var5"]
+        #
+        downsample_steps: 2             # after image projection 
         bias_polyorder: 3
         var_polyorder: 2
-
+        #
         visualize: false
 
     odometry:
+      gt:
+        type: lidar.odometry_gt
+        num_threads: 10
+        #
+        traj_qc_diag: [1.0, 0.1, 0.1, 0.1, 0.1, 1.0]
+
       icp:
         type: lidar.odometry_icp
-
+        num_threads: 10
         # continuous time estimation
         use_trajectory_estimation: true
         traj_num_extra_states: 0
-        traj_qc_diag: [4.0, 4.0, 0.5, 0.1, 0.1, 1.0] # good: 0.3 2D, 0.48 3d \\ Terr(2D) 0.30%  Rerr(2D) 0.0008deg/m  Terr(3D) 0.47% Rerr(2D) 0.0015deg/m \\
-
+        traj_qc_diag: [4.0, 4.0, 0.5, 0.1, 0.1, 1.0]
         # ICP parameters
-        num_threads: 10
         first_num_steps: 3
         initial_max_iter: 6
         initial_max_pairing_dist: 3.0
         initial_max_planar_dist: 1.0
-        refined_max_iter: 30
+        refined_max_iter: 20
         refined_max_pairing_dist: 1.0
         refined_max_planar_dist: 0.3
         averaging_num_steps: 3
+        remove_orientation: false
         # steam parameters
         verbose: false
         max_iterations: 1
         # gyro
-        gyro_cov: 1e-2
-        remove_orientation: false
-
+        gyro_cov: 1e-4
         # thresholds
-        min_matched_ratio: 0.0
+        min_matched_ratio: 0.3
         max_trans_diff: 1000.0
-        max_trans_vel_diff: 1000.0
+        max_trans_vel_diff: 1.0
+        #
+        visualize: false
 
+      wheel:
+        type: lidar.odometry_wheel
+        num_threads: 10
+        # wheel odometry parameters       
+        potentially_slipping: true
+        estimate_bias: false
+        bias_alpha: 0.005
+        min_time_bias_count: 200.0   # 1 / median time diff between IMU measurements (applanix ~200)
+        # wheel_parameter: 0.00052201
+        # wheel_parameter: 0.00052229 
+        wheel_parameter: 0.00052217
+        #
         visualize: false
 
       doppler:
         type: lidar.odometry_doppler
+        num_threads: 10
         #
-        num_threads: 1
         traj_qc_diag: [1.0, 0.001, 0.001, 0.001, 0.001, 1.0]
-        # doppler odom parameters
+        # ransac
         ransac_seed: 0
         ransac_gyro: true
         ransac_max_iter: 100
-        ransac_threshold: 0.2
-        prior_threshold: 3.0        # m/s
         ransac_min_range: 8.0       # m
+        ransac_threshold: 0.2
+        # doppler parameters
+        prior_threshold: 3.0        # m/s
         integration_steps: 100
         zero_vel_tol: 0.03
-        gyro_cov: [0.00005475, 0.00008683, 0.00002507] #// good
-        #
+        gyro_cov: [0.00005475, 0.00008683, 0.00002507] # good
+        estimate_bias: false
+        # inits
         P0inv: [1e4, 1e4, 1e4, 1e6, 1e6, 1e6]
         Qkinv: [124.097194, 852.430330017, 448.704299478, 1128.19639192, 1230.02908934, 11316.9459369]
         Qzinv: [0.0, 100.0, 100.0, 33271.2755284, 20032.1558168, 0.0]
-        #
+        # thresholds
         max_trans_vel_diff: 1.0     # m/s
 
       mapping:
         type: lidar.odometry_map_maintenance_v2
-
+        #
         map_voxel_size: 0.3
-
-        crop_range_front: 100.0
-        back_over_front_ratio: 1.0
-
         point_life_time: 10.0
-
+        #
+        crop_range_front: 60.0
+        back_over_front_ratio: 1.0
+        #
         visualize: false
 
       vertex_test:
         type: lidar.vertex_test
-
+        #
         max_translation: 1.0
         max_rotation: 10.0
 
       memory:
         type: "live_mem_manager"
-
+        #
         window_size: 5 # unload data older than this many keyframes
 
     localization:
       recall:
         type: lidar.localization_map_recall
-
+        #
         map_version: "pointmap"
-
+        #
         visualize: false
 
       icp:
         type: lidar.localization_icp
-
-        use_pose_prior: true
-
-        # ICP parameters
         num_threads: 10
+        #
+        use_pose_prior: true
+        # ICP parameters
         first_num_steps: 3
         initial_max_iter: 6
         initial_max_pairing_dist: 5.0
@@ -246,16 +272,14 @@
         refined_max_pairing_dist: 1.0
         refined_max_planar_dist: 0.3
         averaging_num_steps: 3
-
         # steam parameters
         verbose: false
         max_iterations: 1
-
         # threshold
         min_matched_ratio: 0.3
 
       memory:
         type: "graph_mem_manager"
-
+        #
         vertex_life_span: 5
         window_size: 3

@@ -96,7 +96,6 @@ int main(int argc, char **argv) {
   const auto encoder_max = node->declare_parameter<int>("boreas.wheel_encoder.encoder_max", 16777216);
   CLOG(WARNING, "boreas_wrapper") << "Wheel encoder enabled: " << use_wheel_encoder;
   std::vector<std::pair<int64_t, int64_t>> all_wheel_meas;
-  double wheel_param = 0.0;
   EdgeTransform T_wheel_robot; 
   if (use_wheel_encoder) {
     load_wheel_encoder_data(odo_dir, encoder_max, all_wheel_meas);
@@ -163,7 +162,7 @@ int main(int argc, char **argv) {
   T_lid_world_gt.reserve(files.size());
   v_lid_gt.reserve(files.size());
   if (load_gt) {
-    load_lidar_groundtruth(odo_dir, T_lid_world_gt, v_lid_gt);
+    load_lidar_groundtruth(odo_dir, T_lid_world_gt, v_lid_gt, "lidar");
     CLOG(WARNING, "boreas_wrapper") << "Loaded groundtruth for " << T_lid_world_gt.size() << " frames";
   }
 
@@ -204,7 +203,6 @@ int main(int argc, char **argv) {
     // Feed in IMU data if available/desired
     std::vector<sensor_msgs::msg::Imu> gyro_msgs;
     if (use_imu) {
-      int64_t timestamp_imu = all_imu_meas[imu_counter].timestamp_ns;
       int64_t start_timestamp = points(0, 5) * 1.0e9;
       int64_t end_timestamp = points(points.rows() - 1, 5) * 1.0e9;
 
@@ -233,7 +231,6 @@ int main(int argc, char **argv) {
     // Feed in wheel encoder data if available/desired
     std::vector<std::pair<rclcpp::Time, double>> wheel_meas;
     if (use_wheel_encoder) {
-      int64_t timestamp_wheel = all_wheel_meas[wheel_counter].first;
       int64_t start_timestamp = points(0, 5) * 1.0e9;
       int64_t end_timestamp = points(points.rows() - 1, 5) * 1.0e9;
 

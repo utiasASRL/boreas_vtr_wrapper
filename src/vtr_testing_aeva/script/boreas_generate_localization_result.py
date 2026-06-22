@@ -51,25 +51,15 @@ class BagFileParser():
     return [(timestamp, deserialize_message(data, self.topic_msg_message[topic_name])) for timestamp, data in rows]
 
 
-def main(dataset_dir, result_dir, input_loc_dir):
+def main(dataset_dir, result_dir):
   result_dir = osp.normpath(result_dir)
   odo_input = osp.basename(result_dir)
-
   loc_inputs = [i for i in os.listdir(result_dir) if (i != odo_input and i.startswith("boreas"))]
   loc_inputs.sort()
-
-  if input_loc_dir in loc_inputs:
-    loc_inputs = [input_loc_dir]
-
   print("Result Directory:", result_dir)
   print("Odometry Run:", odo_input)
   print("Localization Runs:", loc_inputs)
   print("Dataset Directory:", dataset_dir)
-
-  T_axel_applanix = np.array([[0.0299955, 0.99955003, 0, 0.51],
-                            [-0.99955003, 0.0299955, 0., 0.0],
-                            [ 0, 0, 1, 1.45],
-                            [ 0, 0, 0, 1]])
 
   # dataset directory and necessary sequences to load
   dataset_odo = BoreasDataset(osp.normpath(dataset_dir), [[odo_input]])
@@ -77,26 +67,29 @@ def main(dataset_dir, result_dir, input_loc_dir):
   # generate ground truth pose dictionary
   ground_truth_poses_odo = dict()
   for sequence in dataset_odo.sequences:
-    # Ground truth is provided w.r.t sensor, so we set sensor to vehicle transform 
-    # New way using rear axle
+    # Ground truth is provided w.r.t sensor, so we want to get transfrom from sensor to robot (rear wheel) frame
+    T_applanix_wheel_file = os.path.join(dataset_dir, odo_input, "calib/T_applanix_wheel.txt")
+    if not os.path.exists(T_applanix_wheel_file):
+      print("File does not exist:", T_applanix_wheel_file)
+      return
+    T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
+    T_wheel_applanix = get_inverse_tf(T_applanix_wheel)
+    T_wheelfwd_wheel = np.array([[0, 1, 0, 0],
+                                [-1, 0, 0, 0],
+                                [0, 0, 1, 0],
+                                [0, 0, 0, 1]])
 
-    T_robot_lidar_odo = T_axel_applanix @ sequence.calib.T_applanix_aeva
-    T_lidar_robot_odo = get_inverse_tf(T_robot_lidar_odo)
+    T_robot_applanix = T_wheelfwd_wheel @ T_wheel_applanix
+    T_robot_lidar_odo = T_robot_applanix @ sequence.calib.T_applanix_lidar @ get_inverse_tf(sequence.calib.T_aeva_lidar)
 
     # build dictionary
-    precision = 1e7  # divide by this number to ensure always find the timestamp
+    precision = int(1e7)  # divide by this number to ensure always find the timestamp
     ground_truth_poses_odo.update(
-        {int(int(frame.timestamp * 1e9) / precision): frame.pose for frame in sequence.aeva_frames})
+        {int(round(int(frame.timestamp * 1e9) / precision)): frame.pose for frame in sequence.aeva_frames})
+
   print("Loaded number of odometry poses: ", len(ground_truth_poses_odo))
 
   for i, loc_input in enumerate(loc_inputs):
-
-    save_loc_input = loc_input
-    # want to keep thresholding information to rename saved files later
-    if '_threshold_' in loc_input:
-      loc_input = loc_input.split('_threshold_')[0]
-
-    print("Processing localization run:", loc_input)
 
     # dataset directory and necessary sequences to load
     dataset_loc = BoreasDataset(osp.normpath(dataset_dir), [[loc_input]])
@@ -104,20 +97,30 @@ def main(dataset_dir, result_dir, input_loc_dir):
     # generate ground truth pose dictionary
     ground_truth_poses_loc = dict()
     for sequence in dataset_loc.sequences:
-      # Ground truth is provided w.r.t sensor, so we set sensor to vehicle transform
-      # New way using rear axle
-      T_app_aeva = sequence.calib.T_applanix_aeva
-      T_robot_lidar_loc = T_axel_applanix @ T_app_aeva
+      # Ground truth is provided w.r.t sensor, so we want to get transform from sensor to robot (rear wheel) frame
+      T_applanix_wheel_file = os.path.join(dataset_dir, loc_input, "calib/T_applanix_wheel.txt")
+      if not os.path.exists(T_applanix_wheel_file):
+        print("File does not exist:", T_applanix_wheel_file)
+        return
+      T_applanix_wheel = np.loadtxt(T_applanix_wheel_file)
+      T_wheel_applanix = get_inverse_tf(T_applanix_wheel)
+      T_wheelfwd_wheel = np.array([[0, 1, 0, 0],
+                                  [-1, 0, 0, 0],
+                                  [0, 0, 1, 0],
+                                  [0, 0, 0, 1]])
+
+      T_robot_applanix = T_wheelfwd_wheel @ T_wheel_applanix
+      T_robot_lidar_loc = T_robot_applanix @ sequence.calib.T_applanix_lidar @ get_inverse_tf(sequence.calib.T_aeva_lidar)
       T_lidar_robot_loc = get_inverse_tf(T_robot_lidar_loc)
 
       # build dictionary
-      precision = 1e7  # divide by this number to ensure always find the timestamp
+      precision = int(1e7)  # divide by this number to ensure always find the timestamp
       ground_truth_poses_loc.update(
-          {int(int(frame.timestamp * 1e9) / precision): frame.pose for frame in sequence.aeva_frames})
+          {int(round(int(frame.timestamp * 1e9) / precision)): frame.pose for frame in sequence.aeva_frames})
 
     print("Loaded number of localization poses: ", len(ground_truth_poses_loc))
 
-    loc_dir = osp.join(result_dir, save_loc_input)
+    loc_dir = osp.join(result_dir, loc_input)
 
     data_dir = osp.join(loc_dir, "graph/data")
     if not osp.exists(data_dir):
@@ -133,8 +136,8 @@ def main(dataset_dir, result_dir, input_loc_dir):
     errors = np.empty((len(messages), 6))
     for i, message in enumerate(messages):
 
-      test_seq_timestamp = int(int(message[1].timestamp) / 1000)
-      map_seq_timestamp = int(int(message[1].vertex_timestamp) / 1000)
+      test_seq_timestamp = int(round(int(message[1].timestamp) / 1000))
+      map_seq_timestamp = int(round(int(message[1].vertex_timestamp) / 1000))
       T_test_map_vec = np.array(message[1].t_robot_vertex.xi)[..., None]
       T_test_map = se3op.vec2tran(T_test_map_vec)
       T_test_map_in_lidar = T_lidar_robot_loc @ T_test_map @ T_robot_lidar_odo
@@ -142,15 +145,15 @@ def main(dataset_dir, result_dir, input_loc_dir):
       T_map_test_in_lidar_res = T_map_test_in_lidar.flatten().tolist()[:12]
       result.append([test_seq_timestamp, map_seq_timestamp] + T_map_test_in_lidar_res)
 
-      if not int(message[1].timestamp / precision) in ground_truth_poses_loc.keys():
-        print("WARNING: time stamp not found 1: ", int(message[1].timestamp / precision))
+      if not int(round(int(message[1].timestamp) / precision)) in ground_truth_poses_loc.keys():
+        print("WARNING: time stamp not found in loc keys: ", int(round(int(message[1].timestamp) / precision)))
         continue
-      if not int(message[1].vertex_timestamp / precision) in ground_truth_poses_odo.keys():
-        print("WARNING: time stamp not found 2: ", int(message[1].vertex_timestamp / precision))
+      if not int(round(int(message[1].vertex_timestamp) / precision)) in ground_truth_poses_odo.keys():
+        print("WARNING: time stamp not found in odo keys: ", int(round(int(message[1].vertex_timestamp) / precision)))
         continue
 
-      test_seq_timestamp = int(message[1].timestamp / precision)
-      map_seq_timestamp = int(message[1].vertex_timestamp / precision)
+      test_seq_timestamp = int(round(int(message[1].timestamp) / precision))
+      map_seq_timestamp = int(round(int(message[1].vertex_timestamp) / precision))
       T_test_map_vec = np.array(message[1].t_robot_vertex.xi)[..., None]
       T_test_map = se3op.vec2tran(T_test_map_vec)
       T_test_map_in_lidar = T_lidar_robot_loc @ T_test_map @ T_robot_lidar_odo
@@ -166,40 +169,11 @@ def main(dataset_dir, result_dir, input_loc_dir):
 
     output_dir = osp.join(result_dir, "localization_result")
     os.makedirs(output_dir, exist_ok=True)
-    with open(osp.join(output_dir, save_loc_input + ".txt"), "+w") as file:
+    with open(osp.join(output_dir, loc_input + ".txt"), "+w") as file:
       writer = csv.writer(file, delimiter=' ')
       writer.writerows(result)
-      print("Written to file:", osp.join(output_dir, save_loc_input + ".txt"))
+      print("Written to file:", osp.join(output_dir, loc_input + ".txt"))
 
-  # Option to save velocity results    
-  if False:
-    bag_file = '{0}/{1}/{1}_0.db3'.format(osp.abspath(data_dir), "repeat_odometry_vel_result")
-    parser = BagFileParser(bag_file)
-    messages = parser.get_bag_messages("repeat_odometry_vel_result")
-
-    vel_results = []
-    for _, message in enumerate(messages):
-      w_v_r_robot = np.zeros((6))
-      w_v_r_robot[0] = message[1].linear.x
-      w_v_r_robot[1] = message[1].linear.y
-      w_v_r_robot[2] = message[1].linear.z
-      w_v_r_robot[3] = message[1].angular.x
-      w_v_r_robot[4] = message[1].angular.y
-      w_v_r_robot[5] = message[1].angular.z
-
-      w_r_v_lidar = np.zeros((6))
-      w_r_v_lidar[:3] = (- w_v_r_robot[:3].reshape(1, 3) @ T_robot_lidar_loc[:3, :3]).flatten()
-      w_r_v_lidar[3:] = (- w_v_r_robot[3:].reshape(1, 3) @ T_robot_lidar_loc[:3, :3]).flatten()
-
-      timestamp = int(int(message[0]) / 1000)
-      vel_results.append([timestamp] + w_r_v_lidar.flatten().tolist())
-    
-    output_dir = osp.join(result_dir, "localization_vel_result")
-    os.makedirs(output_dir, exist_ok=True)
-    with open(osp.join(output_dir, save_loc_input + "_vel.txt"), "+w") as file:
-      writer = csv.writer(file, delimiter=' ')
-      writer.writerows(vel_results)
-      print("Written to file:", osp.join(output_dir, save_loc_input + "_vel.txt"))
 
 if __name__ == "__main__":
 
@@ -210,8 +184,7 @@ if __name__ == "__main__":
   # <rosbag name>/<rosbag name>_0.db3
   parser.add_argument('--dataset', default=os.getcwd(), type=str, help='path to boreas dataset (contains boreas-*)')
   parser.add_argument('--path', default=os.getcwd(), type=str, help='path to vtr folder (default: os.getcwd())')
-  parser.add_argument('--input_loc_dir', default=os.getcwd(), type=str, help='input localization directory')
 
   args = parser.parse_args()
 
-  main(args.dataset, args.path, args.input_loc_dir)
+  main(args.dataset, args.path)
