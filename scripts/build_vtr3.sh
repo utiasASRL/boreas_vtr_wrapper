@@ -1,5 +1,6 @@
 # Assumes that ROOTDIR is set and pointing to mm_masking root directory
 source /opt/ros/humble/setup.bash  # source the ROS environment
 cd $ROOTDIR/external/vtr3/main # Go to where vtr3 is located
-MAKEFLAGS="-j$(($(nproc --all) / 4 + 1))" colcon build --parallel-workers 1 --packages-up-to vtr_lidar vtr_radar vtr_radar_lidar --allow-overriding vtr_lidar vtr_radar vtr_radar_lidar vtr_common vtr_logging --cmake-args -DCMAKE_BUILD_TYPE=Release
+MAKEFLAGS="-j1" colcon build --parallel-workers 1 --packages-up-to vtr_lidar vtr_radar vtr_radar_lidar --allow-overriding vtr_lidar vtr_radar vtr_radar_lidar vtr_common vtr_logging --cmake-args -DCMAKE_BUILD_TYPE=Release
+
 cd $ROOTDIR

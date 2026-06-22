@@ -12,6 +12,7 @@ then
 else
 	echo 'New container run initialized.'
 	docker run -it --rm --name boreas_wrapper_$(whoami) \
+	--gpus all \
 	--privileged \
 	--network=host \
 	--ipc=host \
@@ -20,6 +21,8 @@ else
 	-v /tmp/.X11-unix:/tmp/.X11-unix \
 	-v ${HOME}/.Xauthority:${HOME}/.Xauthority:rw \
 	-v $ROOTDIR:$ROOTDIR:rw \
+	-v "/media/asrl/Extreme SSD/ASRL/boreas/data":/boreas_data:rw \
+	-v "/media/asrl/Extreme SSD/ASRL/boreas/boreas_vtr_wrapper_results":"/media/asrl/Extreme SSD/ASRL/boreas/boreas_vtr_wrapper_results":rw \
 	-w $ROOTDIR boreas_wrapper_$(whoami)
 fi
 cd $ROOTDIR

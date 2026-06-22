@@ -9,3 +9,6 @@
 [submodule "vtr3_pose_graph"]
     path = external/vtr3_pose_graph
     url = ../vtr3_pose_graph.git
+[submodule "external/NKSR"]
+	path = external/NKSR
+	url = https://github.com/nv-tlabs/NKSR.git

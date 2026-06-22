@@ -6,6 +6,8 @@ source venv/bin/activate
 
 pip install -r $ROOTDIR/requirements.txt
 pip install -e "$ROOTDIR/external/vtr3_pose_graph"
+bash "$ROOTDIR/scripts/install_nksr.sh"
+
 deactivate
 
 cd $ROOTDIR

@@ -22,9 +22,12 @@ from scipy.interpolate import interp1d
 from collections import defaultdict
 
 from radar_translator_cnn import RadarTranslatorCNN
-from pertebation_utils import generate_delta_transforms
+from perturbation_utils import generate_delta_transforms, write_to_csv, depth_to_waveform
 import torch
 import pandas as pd
+
+from matplotlib.colors import ListedColormap
+import gc
 
 ################## 
 # Helper Functions
@@ -208,28 +211,14 @@ def cen_filter_2d(polar_image, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5):
     
     return y
 
-def save_patches_and_labels(save_dir, patches, polar, radar_frame):
-    # Input Data Directories
-    input_dir = Path(save_dir + "/input")
-    array_save_dir = input_dir / "patch_arrays_2_deg_no_interp" # 32 bit array (more precision)
-    
-    # Polar Label Directories
-    labels_dir = Path(save_dir + "/labels")
-
-    array_save_dir.mkdir(parents=True, exist_ok=True)
-    labels_dir.mkdir(parents=True, exist_ok=True)
-    np.save(array_save_dir / f"{radar_frame}.npy", patches)
-    np.save(labels_dir / f"{radar_frame}.npy", polar)
-    return
-
 ######################
 # LOAD MODEL
 ######################
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model = RadarTranslatorCNN(output_bins=6848).to(device)
-model.load_state_dict(torch.load("../model_dev/model_weights/best_baseline.pth", map_location=device))
+model = RadarTranslatorCNN().to(device)
+model.load_state_dict(torch.load("../model_dev/model_weights/6_deg_attentional_MSE/best.pth", map_location=device))
 model.eval()
 
 #######################
@@ -243,15 +232,21 @@ lidar_results_dir = os.path.join(boreas_vtr_wrapper_dir, "results/lidar")
 boreas_data = os.getenv("VTRRDATA") # TODO change to use environment variable
 bd = BoreasDataset(boreas_data)
 
-radar_start_frame = 1 # 65
-radar_end_frame = 1000 # 200
+fov = 6.0
+radar_start_frame = 65 # 65 # 238 # 1216
+radar_end_frame = None # 200 # 298 # 1516
 radar_start_ts = None
 radar_end_ts = None
 
 # Loop through each frame in order (odometry)
 for seq in bd.sequences:
+    # if seq.ID != "boreas-2025-01-08-10-59":
+    #     print(f"Skipping {seq.ID}")
+    #     continue
     print(f"SequenceID: {seq.ID}")
     print(f"Number of Radar Frames: {len(seq.radar_frames)}")
+    if radar_end_frame is None:
+        radar_end_frame = len(seq.radar_frames) - 1
 
     # get radar start and end times
     radar_start_ts = seq.radar_frames[radar_start_frame].frame
@@ -316,8 +311,8 @@ for seq in bd.sequences:
         map_pts_enu = convert_points_to_frame(map_pts_lidar, T_enu_lidar) # map_pts in enu frame
 
         # Range Patch params
-        hfov = np.deg2rad(2.0)
-        vfov = np.deg2rad(2.0)
+        hfov = np.deg2rad(fov)
+        vfov = np.deg2rad(fov)
         hfov_half = hfov / 2.0
         vfov_half = vfov / 2.0
 
@@ -329,16 +324,35 @@ for seq in bd.sequences:
         filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)
 
         # Generate pose perturbations (offsets)
+        # translation_offsets = {
+        #     "x": np.linspace(-0.5, 0.5, 21),
+        #     "y": np.linspace(-0.5, 0.5, 21),
+        #     "z": np.linspace(-0.5, 0.5, 21),
+        # }
+
+        # rotation_offsets_deg = {
+        #     "roll": np.linspace(-2.0, 2.0, 21),
+        #     "pitch": np.linspace(-2.0, 2.0, 21),
+        #     "yaw": np.linspace(-2.0, 2.0, 21),
+        # }
+
         translation_offsets = {
-            "x": np.linspace(-0.2, 0.2, 9),
-            "y": np.linspace(-0.2, 0.2, 9),
-            "z": np.linspace(-0.2, 0.2, 9),
+            # "x": np.linspace(-0.2, 0.2, 41),
+            # "y": np.linspace(-0.5, 0.5, 21),
+            "x": [0.0],
+            # "y": [0.0],
+            # "z": [0.0],
+            "y": np.linspace(-0.2, 0.2, 41),
+            "z": np.linspace(-0.2, 0.2, 41),
         }
 
         rotation_offsets_deg = {
-            "roll": np.linspace(-2.0, 2.0, 9),
-            "pitch": np.linspace(-2.0, 2.0, 9),
-            "yaw": np.linspace(-2.0, 2.0, 9),
+            # "roll": [0.0],
+            # "pitch": [0.0],
+            # "yaw": [0.0],
+            "roll": np.linspace(-2.0, 2.0, 41),
+            "pitch": np.linspace(-2.0, 2.0, 41),
+            "yaw": np.linspace(-2.0, 2.0, 41),
         }
 
         perturbations = generate_delta_transforms(
@@ -348,31 +362,47 @@ for seq in bd.sequences:
             include_identity=True,
         )
 
-        results = []
+        perturbation_dir = "round_nonlinear_test"
+        os.makedirs(perturbation_dir, exist_ok=True)
+        csv_path = f"{perturbation_dir}/{radar_frame.frame}.csv"
 
-        for perturb in perturbations:
-            delta_T = Transformation(T_ba=perturb["delta_T"])
-            map_pts_all_perturbed = [convert_points_to_frame(map_pts_azi_gt, delta_T) for map_pts_azi_gt in map_pts_all]
+        gt_cost = float('inf')
+
+        for perturb in perturbations:            
+            delta_T = perturb["delta_T"]
+            # delta_T[2, 3] += -0.5
+            map_pts_all_perturbed = [convert_points_to_frame(map_pts_azi_gt, Transformation(T_ba=delta_T)) for map_pts_azi_gt in map_pts_all]
 
             # convert to spherical
             pts = np.stack(map_pts_all_perturbed, axis=0) # (400, 3, N)
+            map_pts_all_perturbed = None
+
             x = pts[:, 0, :]
             y = pts[:, 1, :]
             z = pts[:, 2, :]
+
+            pts = None
 
             xy = np.sqrt(x*x + y*y)
             r  = np.sqrt(x*x + y*y + z*z)
             az = np.arctan2(y, x)
             el = np.arctan2(z, xy)
 
+            x = None
+            y = None
+            z = None
+
             # extract small patch of each point cloud
             daz = wrap_to_pi(az - radar_frame.azimuths) # radar_frame.azimuths shape (400, 1); ranges from [-pi, pi]
             patch_mask = (np.abs(daz) <= hfov_half) & (np.abs(el) <= vfov_half)
-            patch_pts_all = [pts[i, :, patch_mask[i]] for i in range(pts.shape[0])] # all patches as a list
             
             patch_r_all        = [r[i,   patch_mask[i]] for i in range(r.shape[0])]
             patch_az_local_all = [daz[i, patch_mask[i]] for i in range(daz.shape[0])]
             patch_el_all       = [el[i,  patch_mask[i]] for i in range(el.shape[0])]
+
+            r = None
+            az = None
+            el = None
 
             az_res_deg = 0.1
             el_res_deg = 0.1
@@ -393,43 +423,118 @@ for seq in bd.sequences:
                 depth_patches.append(depth_img)
 
             patches_np = np.stack(depth_patches).astype(np.float32)
+            
+            patch_mask = None
+            depth_patches = None
+            patch_r_all = None
+            patch_az_local_all = None
+            patch_el_all = None
 
             ####################
             # Pass through model
             ####################
             with torch.no_grad():
                 patches = torch.from_numpy(patches_np).float()
+                patches_np = None
                 patches = patches.unsqueeze(1)            # [400, 1, 21, 21]
                 patches = patches.to(device)
+                logits = model(patches)                   # [400, 2736]
+                preds = torch.sigmoid(logits)             # [400, 2736]
 
-                logits = model(patches)                   # [400, 6848]
-                preds = torch.sigmoid(logits)             # [400, 6848]
+                target_bins = 6848
+                padded_preds = torch.zeros(
+                    preds.size(0),
+                    target_bins,
+                    dtype=preds.dtype,
+                    device=preds.device,
+                )
 
-                preds_np = preds.cpu().numpy()
+                padded_preds[:, :preds.size(1)] = preds
 
-            cost = np.sum((preds_np - filtered_polar) ** 2)
+                preds_np = padded_preds.cpu().numpy()
+                
+                patches = None
+                preds = None
+                padded_preds = None
+                logits = None
 
-            translation = perturb["translation"]
-            rpy_deg = perturb["rotation_rpy_deg"]
+            norm_factor = 0.5613
+            diff = np.abs(preds_np - filtered_polar / norm_factor)
+            diff[:, 2736:] = 0.0
 
-            results.append({
-                "name": perturb["name"],
-                "cost": cost,
-                "dx": translation[0],
-                "dy": translation[1],
-                "dz": translation[2],
-                "roll_deg": rpy_deg[0],
-                "pitch_deg": rpy_deg[1],
-                "yaw_deg": rpy_deg[2],
-            })
+            cost = np.sum(diff ** 2)
 
-        df = pd.DataFrame(results)
+            ##############################
+            # Pass through classical model
+            ##############################
+            # pred = []
+    
+            # # Create a list of 400 1D numpy arrays containing only non-zeros
+            # # nonzero_per_patch = [patch[patch != 0] for patch in patches_np]
+
+            # for nonzero_depth in patch_r_all:
+            #     pred.append(depth_to_waveform(nonzero_depth))
+
+            # preds_np = np.array(pred)
+            # preds_np[preds_np > 0] = 1.0
+            # pred = None
+            # nonzero_per_patch = None
+            
+            # # overlap_mask = (preds_np > 0) & (filtered_polar > 0)
+            # filtered_polar_binary = np.zeros_like(filtered_polar)
+            # filtered_polar_binary[filtered_polar > 0] = 1.0
+            
+            # diff = np.abs(preds_np - filtered_polar_binary)
+            # diff[:, 1830:] = 0.0
+
+            # cost = np.sum(diff ** 2)
+
+            if perturb['name'] == 'identity':
+                gt_cost = cost
+
+            if cost <= gt_cost:
+                print(perturb['name'])
+
+                # Save diff image
+                output_dir = f"{perturbation_dir}/{radar_frame.frame}"
+                os.makedirs(output_dir, exist_ok=True)
+
+                radar_frame.polar = diff
+                cart_diff = radar_frame.polar_to_cart(cart_resolution=0.2384, cart_pixel_width=1000, in_place=False)
+
+                diff_img = (cart_diff * 255.0).astype(np.uint8)
+
+                # GT image
+                radar_frame.polar = filtered_polar / norm_factor
+                cart_gt = radar_frame.polar_to_cart(cart_resolution=0.2384, cart_pixel_width=1000, in_place=False)
+
+                gt_img = (cart_gt * 255.0).astype(np.uint8)
+
+                # Pred image
+                radar_frame.polar = preds_np
+                cart_pred = radar_frame.polar_to_cart(cart_resolution=0.2384, cart_pixel_width=1000, in_place=False)
+
+                pred_img = (cart_pred * 255.0).astype(np.uint8)
+
+                # Save stacked image
+                stacked_img = cv2.hconcat([gt_img, pred_img, diff_img])
+                stacked_filename = os.path.join(output_dir, f"{perturb['name']}.png")
+                cv2.imwrite(stacked_filename, stacked_img)
+                
+                del cart_diff, diff_img, cart_gt, gt_img, cart_pred, pred_img, stacked_img
+                gc.collect()
+            
+            preds_np = None
+            diff = None
+
+            write_to_csv(csv_path, perturb, cost)
+            print("saved to csv")
+
+        df = pd.read_csv(csv_path)
         df_sorted = df.sort_values("cost")
-        print(df_sorted)    
+        print(df_sorted) 
 
         radar_frame.unload_data()
         print("radar frame unloaded!")
-        radar_frame_idx += 1
-
-        break
+        radar_frame_idx += 100
     break
