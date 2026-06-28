@@ -467,10 +467,10 @@ if visualize_meshes:
 
 # Connectivity-transfer tuning. All distance thresholds are multiples of the
 # median nearest-neighbor spacing in the filtered measured point cloud.
-max_snap_distance_multiplier = 5.0
-max_edge_length_multiplier = 12.0
-max_centroid_support_multiplier = 5.0
-min_normal_alignment = 0.25
+max_snap_distance_multiplier = 10.0
+max_edge_length_multiplier = 25.0
+max_centroid_support_multiplier = 20.0
+min_normal_alignment = 0.0
 reconstruction_parameters = {
     "max_snap_distance_multiplier": max_snap_distance_multiplier,
     "max_edge_length_multiplier": max_edge_length_multiplier,
@@ -524,10 +524,10 @@ for seq in bd.sequences:
 
         pcd_robot = o3d.geometry.PointCloud()
         pcd_robot.points = o3d.utility.Vector3dVector(map_pts_robot.T)
-        pcd_robot, _ = pcd_robot.remove_radius_outlier(
-            nb_points=3,
-            radius=0.50,
-        )
+        # pcd_robot, _ = pcd_robot.remove_radius_outlier(
+        #     nb_points=3,
+        #     radius=0.50,
+        # )
         filtered_points_robot = np.asarray(pcd_robot.points).copy()
         filtered_points_lidar = convert_points_to_frame(
             filtered_points_robot.T,
@@ -542,7 +542,7 @@ for seq in bd.sequences:
             reconstructor=reconstructor,
             device=device,
             output_vertices=filtered_points_robot,
-            detail_level=1.0,
+            detail_level=0.0,
             mise_iter=1,
             trim=True,
             max_snap_distance_multiplier=max_snap_distance_multiplier,

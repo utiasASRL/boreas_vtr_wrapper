@@ -321,7 +321,7 @@ def main():
     parser.add_argument("--radar-start-frame", type=int, default=65)
     parser.add_argument("--radar-end-frame", type=int, default=None)
     parser.add_argument("--sequence-id", default=None)
-    parser.add_argument("--geometry-batch-size", type=int, default=16)
+    parser.add_argument("--geometry-batch-size", type=int, default=400)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--fov-deg", type=float, default=6.0)
     parser.add_argument("--res-deg", type=float, default=0.1)
@@ -357,7 +357,7 @@ def main():
         res_deg=args.res_deg,
         min_range=0.0,
         max_uv_edge_length=None,
-        max_depth_jump=2.0,
+        max_depth_jump=None,
     )
     patch_config["fov_deg"] = args.fov_deg
 

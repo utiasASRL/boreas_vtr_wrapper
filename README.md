@@ -9,6 +9,8 @@ git checkout script_update
 git submodule update --init --recursive
 ```
 
+The recursive submodule update also checks out NKSR under `external/NKSR`.
+
 ## Build boreas_vtr_wrapper Docker Image
 
 This builds a image that has all dependencies installed.
@@ -45,6 +47,20 @@ Within the running container
 bash scripts/create_venv.sh
 ```
 
+## Install NKSR into an existing virtual environment
+
+The Docker image already uses a CUDA 11.8 development image, which includes
+`nvcc`. To add NKSR to an existing project virtual environment without
+rebuilding the Docker image, run this inside the container:
+
+```Bash
+git submodule update --init --recursive external/NKSR
+bash scripts/install_nksr.sh
+```
+
+The installation keeps PyTorch on CUDA 11.8 and builds NKSR's CUDA extension
+for compute capability 8.6.
+
 # Running Experiments
 
 ## Visualization
@@ -54,7 +70,8 @@ First launch RVIZ for visualization:
 
 ```Bash
 source /opt/ros/humble/setup.bash               # source the ROS environment
-ros2 run rviz2 rviz2 -d ${VTRSRC}/rviz/radar.rviz # launch rviz
+ros2 run rviz2 rviz2 -d ${VTRSRC}/rviz/radar.rviz # launch radar rviz
+ros2 run rviz2 rviz2 -d ${VTRSRC}/rviz/lidar.rviz # launch lidar rviz
 ```
 
 Then in another terminal, launch `rqt_reconfigure` for control. Currently supported dynamic reconfigure parameters: `control_test.play` and `control_test.delay_millisec`

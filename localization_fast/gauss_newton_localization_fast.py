@@ -2025,7 +2025,7 @@ def levenberg_marquardt_optimize_fast(
         cand_cost_result = None
         cand_cost = float("inf")
         t1 = perf_counter()
-        num_alpha_attempts = max_alpha_attempts if use_alpha_line_search else 1
+        num_alpha_attempts = max_alpha_attempts if use_alpha_line_search else 3
         for attempt_idx in range(num_alpha_attempts):
             alpha_attempts += 1
             delta_trial = alpha * step_direction
@@ -2033,9 +2033,12 @@ def levenberg_marquardt_optimize_fast(
             cand_cost_result = cost_fn(candidate)
             cand_cost = float(cand_cost_result.cost)
 
+            break
+
             if not accept_decrease_only or cand_cost < cost:
                 break
             if attempt_idx + 1 < num_alpha_attempts:
+                print("hello")
                 alpha *= alpha_shrink
 
         t_candidate = perf_counter() - t1
@@ -2067,7 +2070,7 @@ def levenberg_marquardt_optimize_fast(
             damping = min(max_damping, damping * damping_increase)
             if use_momentum:
                 velocity = None
-                current_alpha *= alpha_shrink
+                # current_alpha *= alpha_shrink
             iters_without_best_improvement += 1
 
         actual_decrease = cost - cand_cost
@@ -2091,6 +2094,7 @@ def levenberg_marquardt_optimize_fast(
             "velocity": None if velocity is None else velocity.copy(),
             "allowed_cost_increase": allowed_cost_increase,
             "iters_without_best_improvement": iters_without_best_improvement,
+            "momentum_reset": False,
             "delta_norm": delta_norm_applied,
             "delta_norm_raw": delta_norm_raw,
             "delta_norm_applied": delta_norm_applied,
@@ -2142,9 +2146,14 @@ def levenberg_marquardt_optimize_fast(
                 print("Stopped: alpha line search found no decreasing step.")
             break
         if use_momentum and iters_without_best_improvement >= max_iters_without_best_improvement:
+            velocity = None
+            # current_alpha = float(initial_alpha)
+            # current_alpha *= alpha_shrink
+            iters_without_best_improvement = 0
+            history[-1]["momentum_reset"] = True
+            history[-1]["next_alpha"] = current_alpha
             if verbose:
-                print("Stopped: no improvement to the best cost within the momentum patience limit.")
-            break
+                print("Reset momentum: no best-cost improvement within patience limit.")
 
     return GNResult(state=best_state if use_momentum else state, history=history)
 

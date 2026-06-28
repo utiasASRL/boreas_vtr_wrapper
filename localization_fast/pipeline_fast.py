@@ -18,7 +18,6 @@ from localization.pipeline import (
     cen_filter_2d,
     correct_offsets,
     get_submap_vertices,
-    load_radar_translator_model,
 )
 from localization_fast.gauss_newton_localization_fast import (
     GeometryParams,
@@ -26,6 +25,7 @@ from localization_fast.gauss_newton_localization_fast import (
     run_radar_lidar_localization_gn_fast,
 )
 from perturbation_cost_tests.perturbation_utils import make_delta_T
+from perturbation_cost_tests.radar_translator_cnn import RadarTranslatorCNN
 from postprocessing.mesh_to_depth_image import load_submap_mesh_to_enu
 
 
@@ -49,6 +49,22 @@ RESULT_FIELDNAMES = [
     "iterations",
     "accepted_steps",
 ]
+
+
+def load_radar_translator_model(weights_path, device):
+    model = RadarTranslatorCNN().to(device)
+    checkpoint = torch.load(weights_path, map_location=device)
+    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+        state_dict = checkpoint["model_state_dict"]
+    elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+        state_dict = checkpoint["state_dict"]
+    else:
+        state_dict = checkpoint
+    if isinstance(state_dict, dict) and any(key.startswith("module.") for key in state_dict):
+        state_dict = {key.removeprefix("module."): value for key, value in state_dict.items()}
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model
 
 
 def pose_error_xyz_rpy(T_est, T_gt):
@@ -247,7 +263,8 @@ def run_sequence(
         filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)
 
         # Current debug setup: yaw-only localization from a known yaw offset.
-        T_offset = make_delta_T(rpy_deg=np.array([2.0, 0.0, 0.0]))
+        # T_offset = make_delta_T(rpy_deg=np.array([2.0, 2.0, 2.0]))
+        T_offset = make_delta_T(translation=np.array([0.3, 0.3, 0.3]))
         T_gt = np.linalg.inv(T_enu_radar)
         T_init = T_offset @ T_gt
 
@@ -268,7 +285,7 @@ def run_sequence(
             fill_value=patch_config["fill_value"],
         )
 
-        active_dims = [3]  # [x, y, z, roll, pitch, yaw] -> yaw only.
+        active_dims = [0, 1, 2]  # [x, y, z, roll, pitch, yaw] -> yaw only.
         residual_options = ResidualBuildOptions(
             device=str(device),
             model_output_activation="sigmoid",
@@ -292,15 +309,17 @@ def run_sequence(
             damping_mode="identity",
             active_dims=active_dims,
             use_alpha_line_search=False,
-            initial_alpha=50.0,
-            alpha_shrink=0.1,
+            # initial_alpha=100.0,
+            initial_alpha=25.0,
+            alpha_shrink=0.75,
             use_momentum=True,
-            momentum_beta=0.8,
-            max_cost_increase_ratio=1e-1,
-            max_iters_without_best_improvement=5,
+            # momentum_beta=0.9,
+            momentum_beta=0.9,
+            max_cost_increase_ratio=1e-1, # TODO change this
+            max_iters_without_best_improvement=2,
             radar_azimuths=radar_azimuths,
-            max_iters=10,
-            verbose=False,
+            max_iters=20,
+            verbose=True,
         )
 
         print_localization_error_report(
@@ -322,7 +341,7 @@ def run_sequence(
 
         radar_frame.unload_data()
         print("radar frame unloaded!")
-        radar_frame_idx += 1
+        radar_frame_idx += 100
 
 
 def main():
@@ -382,11 +401,11 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     weights_path = os.path.join(
         boreas_vtr_wrapper_dir,
-        "model_dev/model_weights/6_deg_attentional_MSE_delauney/best.pth",
+        "model_dev/model_weights/6_deg_attentional_skip_bigger/best.pth",
     )
     model = load_radar_translator_model(weights_path, device)
 
-    radar_start_frame = 65 # 2065
+    radar_start_frame = 65 # 365 # 2065
     radar_end_frame = None
     fov_deg = 6.0
     res_deg = 0.1
