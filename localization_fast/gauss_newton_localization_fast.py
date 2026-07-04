@@ -1114,16 +1114,21 @@ def torch_mesh_depth_geometry_batch(
     return outputs, timing_per_azimuth
 
 
+def damping_matrix(H: Array, damping_mode: str = "identity") -> Array:
+    H = np.asarray(H, dtype=float)
+
+    if damping_mode == "identity":
+        return np.eye(H.shape[0], dtype=H.dtype)
+    elif damping_mode == "diag":
+        return np.diag(np.maximum(np.diag(H), 1e-12))
+    else:
+        raise ValueError(f"Unknown damping_mode: {damping_mode}")
+
+
 def solve_damped_gn_step(H: Array, g: Array, damping: float = 1e-3, damping_mode: str = "identity") -> Array:
     H = np.asarray(H, dtype=float)
     g = np.asarray(g, dtype=float).reshape(-1)
-
-    if damping_mode == "identity":
-        D = np.eye(H.shape[0], dtype=H.dtype)
-    elif damping_mode == "diag":
-        D = np.diag(np.maximum(np.diag(H), 1e-12))
-    else:
-        raise ValueError(f"Unknown damping_mode: {damping_mode}")
+    D = damping_matrix(H, damping_mode)
 
     return -np.linalg.solve(H + damping * D, g)
 
@@ -1949,7 +1954,7 @@ def levenberg_marquardt_optimize_fast(
     min_damping: float = 1e-12,
     max_damping: float = 1e12,
     use_alpha_line_search: bool = False,
-    initial_alpha: float = 1.0,
+    initial_alpha: float | Sequence[float] = 1.0,
     alpha_shrink: float = 0.5,
     max_alpha_attempts: int = 1,
     use_momentum: bool = False,
@@ -1958,9 +1963,12 @@ def levenberg_marquardt_optimize_fast(
     max_iters_without_best_improvement: int = 3,
     verbose: bool = True,
 ) -> GNResult:
-    if initial_alpha <= 0.0:
-        raise ValueError("initial_alpha must be positive.")
-    if not 0.0 < alpha_shrink < 1.0:
+    initial_alpha = np.asarray(initial_alpha, dtype=float)
+    if initial_alpha.ndim == 0:
+        initial_alpha = np.full(6, float(initial_alpha))
+    if initial_alpha.shape != (6,) or np.any(initial_alpha <= 0.0):
+        raise ValueError("initial_alpha must be a positive scalar or length-6 sequence.")
+    if not 0.0 < alpha_shrink <= 1.0:
         raise ValueError("alpha_shrink must be in (0, 1).")
     if max_alpha_attempts < 1:
         raise ValueError("max_alpha_attempts must be at least 1.")
@@ -1975,15 +1983,20 @@ def levenberg_marquardt_optimize_fast(
 
     state = initial_state
     damping = float(initial_damping)
-    current_alpha = float(initial_alpha)
+    current_alpha = initial_alpha.copy()
     velocity = None
     best_state = copy.deepcopy(initial_state)
     best_cost = float("inf")
     iters_without_best_improvement = 0
+    alpha_attempts = 0
+    num_alpha_attempts = max_alpha_attempts if use_alpha_line_search else 5
     history: List[Dict[str, Any]] = []
     solve_dims = normalize_active_dims(active_dims)
 
     for it in range(max_iters):
+        # if alpha_attempts >= num_alpha_attempts:
+        #     break
+
         t0 = perf_counter()
         lin = residual_jacobian_fn(state)
         t_linearize = perf_counter() - t0
@@ -2000,9 +2013,12 @@ def levenberg_marquardt_optimize_fast(
             iters_without_best_improvement = 0
 
         try:
-            cond_H = float(np.linalg.cond(H_solve + damping * np.eye(H_solve.shape[0])))
+            D_solve = damping_matrix(H_solve, damping_mode)
+            cond_H = float(np.linalg.cond(H_solve))
+            cond_H_damped = float(np.linalg.cond(H_solve + damping * D_solve))
         except np.linalg.LinAlgError:
             cond_H = float("inf")
+            cond_H_damped = float("inf")
 
         delta_solve = solve_damped_gn_step(H_solve, g_solve, damping=damping, damping_mode=damping_mode)
         delta = np.zeros_like(g)
@@ -2015,31 +2031,34 @@ def levenberg_marquardt_optimize_fast(
             else:
                 velocity = momentum_beta * velocity + (1.0 - momentum_beta) * delta
             step_direction = velocity
-            alpha = current_alpha
+            alpha = current_alpha.copy()
         else:
             step_direction = delta
-            alpha = float(initial_alpha) if use_alpha_line_search else 1.0
+            alpha = initial_alpha.copy() if use_alpha_line_search else np.ones(6)
 
-        alpha_attempts = 0
         candidate = None
         cand_cost_result = None
         cand_cost = float("inf")
         t1 = perf_counter()
-        num_alpha_attempts = max_alpha_attempts if use_alpha_line_search else 3
-        for attempt_idx in range(num_alpha_attempts):
-            alpha_attempts += 1
-            delta_trial = alpha * step_direction
-            candidate = retract_fn(state, delta_trial)
-            cand_cost_result = cost_fn(candidate)
-            cand_cost = float(cand_cost_result.cost)
 
-            break
+        delta_trial = alpha * step_direction
+        candidate = retract_fn(state, delta_trial)
+        cand_cost_result = cost_fn(candidate)
+        cand_cost = float(cand_cost_result.cost)
+        
+        # while alpha_attempts < num_alpha_attempts:
+        #     delta_trial = alpha * step_direction
+        #     candidate = retract_fn(state, delta_trial)
+        #     cand_cost_result = cost_fn(candidate)
+        #     cand_cost = float(cand_cost_result.cost)
 
-            if not accept_decrease_only or cand_cost < cost:
-                break
-            if attempt_idx + 1 < num_alpha_attempts:
-                print("hello")
-                alpha *= alpha_shrink
+        #     # break
+
+        #     if not accept_decrease_only or cand_cost < cost:
+        #         break
+        #     else:
+        #         alpha *= alpha_shrink
+        #         alpha_attempts += 1
 
         t_candidate = perf_counter() - t1
         delta_applied = alpha * step_direction
@@ -2070,7 +2089,8 @@ def levenberg_marquardt_optimize_fast(
             damping = min(max_damping, damping * damping_increase)
             if use_momentum:
                 velocity = None
-                # current_alpha *= alpha_shrink
+                current_alpha *= alpha_shrink
+                alpha_attempts += 1
             iters_without_best_improvement += 1
 
         actual_decrease = cost - cand_cost
@@ -2087,8 +2107,8 @@ def levenberg_marquardt_optimize_fast(
             "damping": damping,
             "delta": delta.copy(),
             "delta_applied": delta_applied.copy(),
-            "alpha": alpha,
-            "next_alpha": current_alpha,
+            "alpha": alpha.copy(),
+            "next_alpha": current_alpha.copy(),
             "alpha_attempts": alpha_attempts,
             "momentum_enabled": use_momentum,
             "velocity": None if velocity is None else velocity.copy(),
@@ -2101,7 +2121,8 @@ def levenberg_marquardt_optimize_fast(
             "translation_step_norm": float(np.linalg.norm(delta_applied[:3])),
             "rotation_step_norm": float(np.linalg.norm(delta_applied[3:])),
             "grad_norm": grad_norm,
-            "cond_H_damped": cond_H,
+            "cond_H": cond_H,
+            "cond_H_damped": cond_H_damped,
             "linearize_time_s": t_linearize,
             "candidate_eval_time_s": t_candidate,
             "diagnostics": lin.diagnostics,
@@ -2114,12 +2135,16 @@ def levenberg_marquardt_optimize_fast(
                 status = "ACCEPT_UPHILL"
             else:
                 status = "ACCEPT" if accepted else "REJECT"
+            delta_print = delta_applied.copy()
+            delta_print[3:] = np.rad2deg(delta_print[3:])
             print(
                 f"iter {it:02d} | {status} | "
                 f"cost {cost:.6e} -> {cand_cost:.6e} | "
-                f"|delta| raw {delta_norm_raw:.3e} applied {delta_norm_applied:.3e} | "
-                f"alpha {alpha:.3e} ({alpha_attempts} tries) | |g| {grad_norm:.3e} | "
-                f"lambda {damping:.3e}"
+                # f"|delta| raw {delta_norm_raw:.3e} applied {delta_norm_applied:.3e} | "
+                f"|delta applied| {np.array2string(delta_print, precision=4, separator=', ')} | "
+                f"alpha {np.array2string(alpha, precision=3)} ({alpha_attempts} tries) | "
+                f"|g| {grad_norm:.3e} | cond(H) {cond_H:.3e} | cond(Hd) {cond_H_damped:.3e}"
+                # f"lambda {damping:.3e}"
             )
             current_timing = format_timing_summary("current", t_linearize, lin.diagnostics)
             candidate_timing = format_timing_summary("candidate cost-only", t_candidate, cand_cost_result.diagnostics)
@@ -2148,7 +2173,8 @@ def levenberg_marquardt_optimize_fast(
         if use_momentum and iters_without_best_improvement >= max_iters_without_best_improvement:
             velocity = None
             # current_alpha = float(initial_alpha)
-            # current_alpha *= alpha_shrink
+            current_alpha *= alpha_shrink
+            alpha_attempts += 1
             iters_without_best_improvement = 0
             history[-1]["momentum_reset"] = True
             history[-1]["next_alpha"] = current_alpha
@@ -2173,7 +2199,7 @@ def run_radar_lidar_localization_gn_fast(
     damping_mode: str = "identity",
     active_dims: Optional[Sequence[int]] = None,
     use_alpha_line_search: bool = False,
-    initial_alpha: float = 1.0,
+    initial_alpha: float | Sequence[float] = 1.0,
     alpha_shrink: float = 0.5,
     max_alpha_attempts: int = 1,
     use_momentum: bool = False,

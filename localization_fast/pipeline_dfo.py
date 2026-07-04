@@ -22,11 +22,19 @@ from localization.pipeline import (
 from localization_fast.gauss_newton_localization_fast import (
     GeometryParams,
     ResidualBuildOptions,
-    run_radar_lidar_localization_gn_fast,
+    CostResult,
+    left_se3_retract,
+    compute_radar_cost_only_fast,
 )
 from perturbation_cost_tests.perturbation_utils import make_delta_T
 from perturbation_cost_tests.radar_translator_cnn import RadarTranslatorCNN
 from postprocessing.mesh_to_depth_image import load_submap_mesh_to_enu
+
+from localization_fast.scikit_optimizer_test import (
+    ObjectiveLogger,
+    run_imfil_direct,
+    extract_best_from_result,
+)
 
 
 RESULT_FIELDNAMES = [
@@ -78,9 +86,9 @@ def build_localization_result_row(sequence_id, frame_id, T_init, T_hat, T_gt, hi
     init_xyz, init_rpy_deg, _ = pose_error_xyz_rpy(T_init, T_gt)
     final_xyz, final_rpy_deg, _ = pose_error_xyz_rpy(T_hat, T_gt)
 
-    accepted = [row for row in history if row["accepted"]]
-    initial_cost = float(history[0]["cost"]) if history else float("nan")
-    final_cost = float(history[-1].get("best_cost", initial_cost)) if history else initial_cost
+    initial_cost = float(history[0]) if len(history) > 0 else float("nan")
+    idx = int(np.argmin(history))
+    final_cost = float(history[idx]) if len(history) > 0 else float("nan")
 
     return {
         "sequence_id": sequence_id,
@@ -100,7 +108,6 @@ def build_localization_result_row(sequence_id, frame_id, T_init, T_hat, T_gt, hi
         "initial_cost": initial_cost,
         "final_cost": final_cost,
         "iterations": len(history),
-        "accepted_steps": len(accepted),
     }
 
 
@@ -263,8 +270,8 @@ def run_sequence(
         filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)
 
         # Current debug setup: yaw-only localization from a known yaw offset.
-        T_offset = make_delta_T(rpy_deg=np.array([0.0, 0.0, 2.0]))
-        # T_offset = make_delta_T(translation=np.array([0.0, 0.0, 0.0]), rpy_deg=np.array([0.0, 2.5, 2.5]))
+        # T_offset = make_delta_T(rpy_deg=np.array([2.0, 2.0, 2.0]))
+        T_offset = make_delta_T(translation=np.array([0.2, 0.2, 0.2]), rpy_deg=np.array([2.0, 2.0, 2.0]))
         T_gt = np.linalg.inv(T_enu_radar)
         T_init = T_offset @ T_gt
 
@@ -285,6 +292,7 @@ def run_sequence(
             fill_value=patch_config["fill_value"],
         )
 
+        # TODO: FIGURE OUT HOW TO DEAL WITH ACTIVE DIMS
         active_dims = [0, 1, 2, 3, 4, 5]  # [x, y, z, roll, pitch, yaw] -> yaw only.
         residual_options = ResidualBuildOptions(
             device=str(device),
@@ -296,44 +304,51 @@ def run_sequence(
             geometry_batch_size=geometry_batch_size,
         )
 
-        result = run_radar_lidar_localization_gn_fast(
-            P_v=P_v,
-            mesh_triangles=mesh_triangles,
-            T_init=T_init,
-            odom_transforms=odom_transforms,
-            m_obs_all=radar_polar_cropped,
-            model=model,
-            geom=geom,
-            options=residual_options,
-            initial_damping=0.0,
-            damping_mode="identity",
-            active_dims=active_dims,
-            use_alpha_line_search=False,
-            # initial_alpha=100.0,
-            initial_alpha=[2.0, 2.0, 2.0, 5.0, 5.0, 5.0],
-            alpha_shrink=1.0, # TODO alpha_shrink isn't being used at all right now
-            use_momentum=True,
-            momentum_beta=0.0,
-            max_cost_increase_ratio=1e-1,
-            max_iters_without_best_improvement=2,
-            radar_azimuths=radar_azimuths,
-            max_iters=50,
-            verbose=True,
+        def cost_fn(eps):
+            T_current = left_se3_retract(T=T_init, delta=eps)
+            return compute_radar_cost_only_fast(
+                P_v=P_v,
+                mesh_triangles=mesh_triangles,
+                T=T_current,
+                odom_transforms=odom_transforms,
+                m_obs_all=radar_polar_cropped,
+                model=model,
+                geom=geom,
+                options=residual_options,
+                radar_azimuths=radar_azimuths,
+            ).cost
+        
+        logger = ObjectiveLogger(cost_fn)
+        eps0 = np.asarray([0, 0, 0, 0, 0, 0])
+        bounds = np.array(
+            [
+                [-0.2, 0.2],
+                [-0.2, 0.2],
+                [-0.2, 0.2],
+                [-2.0, 2.0], # deg
+                [-2.0, 2.0], # deg
+                [-2.0, 2.0], # deg
+            ],
+            dtype=float,
         )
+        bounds[3:] = np.deg2rad(bounds[3:]) # TODO: make sure units are right!
+        result, _ = run_imfil_direct("imfil", logger, eps0, bounds, 120) # TODO: remove hardcode
+        eps_best, f_best = extract_best_from_result(result, logger)
+        T_hat = left_se3_retract(T=T_init, delta=eps_best)
 
         print_localization_error_report(
             T_init=T_init,
-            T_hat=result.state,
+            T_hat=T_hat,
             T_gt=T_gt,
-            history=result.history,
+            history=None
         )
         result_row = build_localization_result_row(
             sequence_id=seq.ID,
             frame_id=radar_frame.frame,
             T_init=T_init,
-            T_hat=result.state,
+            T_hat=T_hat,
             T_gt=T_gt,
-            history=result.history,
+            history=logger.history_f
         )
         append_localization_result(results_csv_path, result_row)
         print(f"Saved localization result: {results_csv_path}")

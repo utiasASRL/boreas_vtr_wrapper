@@ -11,6 +11,7 @@ from pyboreas.utils.odometry import interpolate_poses
 from pyboreas.utils.utils import get_inverse_tf
 from pylgmath import Transformation
 from vtr_utils.plot_utils import convert_points_to_frame, extract_points_from_vertex
+from scipy.ndimage import gaussian_filter1d, maximum_filter1d
 
 from localization.pipeline import (
     build_lidar_to_robot_transform,
@@ -40,9 +41,10 @@ def make_perturbations():
     # )
 
     translation_offsets = {
-        "x": [0.0],
+        "x": np.linspace(-0.2, 0.2, 41),
         # "y": np.linspace(-0.2, 0.2, 41),
         # "z": np.linspace(-0.2, 0.2, 41),
+        # "x": [0.0],
         "y": [0.0],
         "z": [0.0],
     }
@@ -50,10 +52,10 @@ def make_perturbations():
     rotation_offsets_deg = {
         "roll": [0.0],
         "pitch": [0.0],
-        # "yaw": [0.0],
+        "yaw": [0.0],
         # "roll": np.linspace(-2.0, 2.0, 41),
         # "pitch": np.linspace(-2.0, 2.0, 41),
-        "yaw": np.linspace(-2.0, 2.0, 81),
+        # "yaw": np.linspace(-2.0, 2.0, 81),
     }
 
     return generate_delta_transforms(
@@ -62,6 +64,92 @@ def make_perturbations():
         mode="axis",
         include_identity=True,
     )
+
+
+def gaussian_kernel_1d(window_size=25, sigma=3.0):
+    x = np.arange(window_size, dtype=np.float32) - window_size // 2
+    kernel = np.exp(-(x ** 2) / (2.0 * sigma ** 2))
+    return kernel / kernel.max()
+
+
+def depth_patch_to_waveform(
+    depth_patch,
+    resolution=0.04381,
+    bins=6848,
+    window_size=25,
+    sigma=3.0,
+):
+    waveform = np.zeros(bins, dtype=np.float32)
+    nonzero_depths = depth_patch[np.isfinite(depth_patch) & (depth_patch != 0.0)]
+    if nonzero_depths.size == 0:
+        return waveform
+
+    indices = np.round(nonzero_depths / resolution).astype(np.int64)
+    valid_indices = indices[(indices >= 0) & (indices < bins)]
+    if valid_indices.size == 0:
+        return waveform
+
+    waveform[valid_indices] = 1.0
+    kernel = gaussian_kernel_1d(window_size=window_size, sigma=sigma)
+    smoothed = np.convolve(waveform, kernel, mode="same")
+    return np.clip(smoothed, 0.0, 1.0).astype(np.float32, copy=False)
+
+
+def build_covisibility_mask(
+    lidar_waveforms,
+    radar_waveforms,
+    window_size=9,
+    lidar_threshold=1e-2,
+    radar_threshold=1e-2,
+):
+    lidar_mask = lidar_waveforms > lidar_threshold
+    radar_mask = radar_waveforms > radar_threshold
+    positive_centers = lidar_mask & radar_mask
+
+    roi_mask = maximum_filter1d(
+        positive_centers.astype(np.uint8),
+        size=window_size,
+        axis=1,
+        mode="constant",
+        cval=0,
+    ).astype(bool)
+
+    return roi_mask, positive_centers
+
+
+def compute_covisibility_cost(
+    preds_np,
+    obs_cropped,
+    lidar_waveforms,
+    window_size=9,
+    lidar_threshold=1e-2,
+    radar_threshold=1e-2,
+):
+    pred_cropped = preds_np[:, :obs_cropped.shape[1]]
+    lidar_cropped = lidar_waveforms[:, :obs_cropped.shape[1]]
+    roi_mask, positive_centers = build_covisibility_mask(
+        lidar_waveforms=lidar_cropped,
+        radar_waveforms=obs_cropped,
+        window_size=window_size,
+        lidar_threshold=lidar_threshold,
+        radar_threshold=radar_threshold,
+    )
+
+    active_bins = int(np.count_nonzero(roi_mask))
+    positive_bins = int(np.count_nonzero(positive_centers))
+    if active_bins == 0:
+        return float("inf"), roi_mask, {
+            "active_roi_bins": active_bins,
+            "positive_center_bins": positive_bins,
+        }
+
+    residual = pred_cropped - obs_cropped
+    cost = 0.5 * float(np.mean(residual[roi_mask] ** 2))
+    stats = {
+        "active_roi_bins": active_bins,
+        "positive_center_bins": positive_bins,
+    }
+    return cost, roi_mask, stats
 
 
 def predict_polar_barycentric(
@@ -89,6 +177,7 @@ def predict_polar_barycentric(
     num_azimuths = len(odom_transforms)
     output_bins = 2736
     preds_np = np.zeros((num_azimuths, target_bins), dtype=np.float32)
+    lidar_waveforms = np.zeros((num_azimuths, target_bins), dtype=np.float32)
 
     patches = []
     patch_rows = []
@@ -116,6 +205,7 @@ def predict_polar_barycentric(
         I = project_points_to_patch_samples(P_r, radar_azi, patch_config)
         selected_counts.append(I.shape[0])
         D = barycentric_interpolate_depth_image(I, patch_config)
+        lidar_waveforms[row] = depth_patch_to_waveform(D, bins=target_bins)
 
         patches.append(D)
         patch_rows.append(row)
@@ -131,7 +221,7 @@ def predict_polar_barycentric(
         "max_selected_points": int(np.max(selected_counts)) if selected_counts else 0,
         "output_bins": output_bins,
     }
-    return preds_np, stats
+    return preds_np, lidar_waveforms, stats
 
 
 def save_debug_images_if_better(
@@ -282,12 +372,23 @@ def run_sequence(
             noise_scale=0.5,
         )
 
+        # filtered_polar = gaussian_filter1d(
+        #     filtered_polar,
+        #     sigma=15.0,
+        #     axis=1,
+        #     mode="reflect",
+        # )
+
         norm_factor = 0.5613
         target_bins = filtered_polar.shape[1]
+        output_bins = 2736
+        covis_window_size = 15
+        lidar_threshold = 5e-2
+        radar_threshold = 5e-2
         obs_padded = filtered_polar / norm_factor
-        obs_cropped = obs_padded[:, :2736]
+        obs_cropped = obs_padded[:, :output_bins]
 
-        perturbation_dir = f"delaunay_yaw"
+        perturbation_dir = f"perturbation_cost_tests/delaunay_covis_window_{covis_window_size}"
         os.makedirs(perturbation_dir, exist_ok=True)
         csv_path = f"{perturbation_dir}/{radar_frame.frame}.csv"
 
@@ -301,7 +402,7 @@ def run_sequence(
             # equivalent left perturbation of the radar pose.
             T_perturbed = np.linalg.inv(perturb["delta_T"]) @ T_gt
 
-            preds_np, patch_stats = predict_polar_barycentric(
+            preds_np, lidar_waveforms, patch_stats = predict_polar_barycentric(
                 map_pts_enu=map_pts_enu,
                 T_radar_enu=T_perturbed,
                 odom_transforms=odom_transforms,
@@ -313,11 +414,18 @@ def run_sequence(
                 target_bins=target_bins,
             )
 
-            residual = preds_np[:, :2736] - obs_cropped
-            cost = 0.5 * float(np.sum(residual ** 2))
+            cost, roi_mask, cost_stats = compute_covisibility_cost(
+                preds_np=preds_np,
+                obs_cropped=obs_cropped,
+                lidar_waveforms=lidar_waveforms,
+                window_size=covis_window_size,
+                lidar_threshold=lidar_threshold,
+                radar_threshold=radar_threshold,
+            )
 
             diff = np.abs(preds_np - obs_padded)
-            diff[:, 2736:] = 0.0
+            diff[:, :output_bins] *= roi_mask
+            diff[:, output_bins:] = 0.0
 
             gt_cost = save_debug_images_if_better(
                 perturb=perturb,
@@ -334,11 +442,13 @@ def run_sequence(
             write_to_csv(csv_path, perturb, cost)
             print(
                 f"{perturb['name']}: cost={cost:.6e} | "
+                f"roi bins={cost_stats['active_roi_bins']} | "
+                f"positive bins={cost_stats['positive_center_bins']} | "
                 f"avg selected={patch_stats['avg_selected_points']:.1f} | "
                 f"time={perf_counter() - t_pert:.3f}s | saved to csv"
             )
 
-            del preds_np, residual, diff
+            del preds_np, lidar_waveforms, roi_mask, diff
             gc.collect()
 
         df = pd.read_csv(csv_path)
@@ -364,7 +474,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     weights_path = os.path.join(
         boreas_vtr_wrapper_dir,
-        "model_dev/model_weights/6_deg_attentional_MSE_delauney/best.pth",
+        "model_dev/model_weights/6_deg_attentional_skip_bigger/best.pth",
     )
     model = load_radar_translator_model(weights_path, device)
 

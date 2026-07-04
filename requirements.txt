@@ -4,4 +4,5 @@ scikit-learn
 catkin_pkg
 empy
 lark
+scikit-quant
 -e ./external/pyboreas

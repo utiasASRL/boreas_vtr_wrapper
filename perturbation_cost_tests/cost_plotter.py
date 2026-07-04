@@ -67,7 +67,7 @@ def load_csv(csv_path):
     return df
 
 
-def plot_cost_vs_dof(csv_paths, dof, xlabel, output_dir, normalize=False, ignore_identity=False, show=False):
+def plot_cost_vs_dof(csv_paths, dof, xlabel, output_dir, normalize=False, normalized_ymax=None, ignore_identity=False, show=False):
     plt.figure(figsize=(9, 6))
 
     plotted_any = False
@@ -95,13 +95,15 @@ def plot_cost_vs_dof(csv_paths, dof, xlabel, output_dir, normalize=False, ignore
 
         label = csv_path.stem
 
-        plt.plot(x, y, marker="o", linewidth=1.5, label=label)
+        plt.plot(x, y, linewidth=1.5, label=label)
         plotted_any = True
 
     plt.xlabel(xlabel)
 
     if normalize:
         plt.ylabel("cost / minimum cost")
+        if normalized_ymax is not None:
+            plt.ylim(top=normalized_ymax)
     else:
         plt.ylabel("sum of squared error cost")
 
@@ -147,6 +149,12 @@ def main():
         action="store_true",
         help="Normalize each curve by its own minimum cost.",
     )
+    parser.add_argument(
+        "--normalized-ymax",
+        type=float,
+        default=None,
+        help="Maximum y limit for normalized cost plots.",
+    )
 
     parser.add_argument(
         "--ignore-identity",
@@ -188,6 +196,7 @@ def main():
             xlabel=xlabel,
             output_dir=output_dir,
             normalize=args.normalize,
+            normalized_ymax=args.normalized_ymax,
             ignore_identity=args.ignore_identity,
             show=args.show,
         )

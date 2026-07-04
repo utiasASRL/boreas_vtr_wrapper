@@ -14,6 +14,7 @@ from pyboreas.utils.odometry import interpolate_poses
 from pyboreas.utils.utils import get_inverse_tf
 from pylgmath import Transformation
 from vtr_utils.plot_utils import convert_points_to_frame
+from perturbation_cost_tests.perturbation_utils import make_delta_T
 
 from localization_fast.gauss_newton_localization_fast import (
     GeometryParams,
@@ -175,6 +176,47 @@ def extract_depth_patches_mesh_gpu(
     return mesh_patches, dict(stats)
 
 
+def extract_augmented_depth_patches_mesh_gpu(
+    mesh_vertices_gpu,
+    mesh_triangles_gpu,
+    azimuth_poses,
+    radar_azimuths,
+    patch_config,
+    geometry_batch_size,
+    device,
+    rng,
+    num_augments,
+    aug_trans_max_m,
+    aug_rot_max_deg,
+):
+    all_patches = []
+    stats = defaultdict(float)
+
+    for aug_idx in range(num_augments + 1):
+        if aug_idx == 0:
+            poses = azimuth_poses
+        else:
+            translation = rng.uniform(-aug_trans_max_m, aug_trans_max_m, size=3)
+            rpy_deg = rng.uniform(-aug_rot_max_deg, aug_rot_max_deg, size=3)
+            delta_T = make_delta_T(translation=translation, rpy_deg=rpy_deg)
+            poses = np.asarray([delta_T @ T for T in azimuth_poses])
+
+        patches, patch_stats = extract_depth_patches_mesh_gpu(
+            mesh_vertices_gpu=mesh_vertices_gpu,
+            mesh_triangles_gpu=mesh_triangles_gpu,
+            azimuth_poses=poses,
+            radar_azimuths=radar_azimuths,
+            patch_config=patch_config,
+            geometry_batch_size=geometry_batch_size,
+            device=device,
+        )
+        all_patches.append(patches)
+        for key, value in patch_stats.items():
+            stats[key] += value
+
+    return np.stack(all_patches, axis=1).astype(np.float32), dict(stats)
+
+
 def run_sequence(
     seq,
     lidar_results_dir,
@@ -185,6 +227,11 @@ def run_sequence(
     geometry_batch_size,
     device,
     method_suffix,
+    data_augment=False,
+    num_augments=4,
+    aug_trans_max_m=0.005,
+    aug_rot_max_deg=0.02,
+    aug_seed=0,
 ):
     print(f"SequenceID: {seq.ID}")
     print(f"Number of Radar Frames: {len(seq.radar_frames)}")
@@ -204,6 +251,7 @@ def run_sequence(
     loaded_submap_stamp_us = None
     mesh_vertices_gpu = None
     mesh_triangles_gpu = None
+    aug_rng = np.random.default_rng(aug_seed)
 
     while (
         submap_vertices_idx < len(submap_vertices) - 1
@@ -259,29 +307,51 @@ def run_sequence(
         pose_time = perf_counter() - t0
 
         t0 = perf_counter()
-        mesh_patches, patch_stats = extract_depth_patches_mesh_gpu(
-            mesh_vertices_gpu=mesh_vertices_gpu,
-            mesh_triangles_gpu=mesh_triangles_gpu,
-            azimuth_poses=azimuth_poses,
-            radar_azimuths=radar_azimuths,
-            patch_config=patch_config,
-            geometry_batch_size=geometry_batch_size,
-            device=device,
-        )
+        if data_augment:
+            mesh_patches, patch_stats = extract_augmented_depth_patches_mesh_gpu(
+                mesh_vertices_gpu=mesh_vertices_gpu,
+                mesh_triangles_gpu=mesh_triangles_gpu,
+                azimuth_poses=azimuth_poses,
+                radar_azimuths=radar_azimuths,
+                patch_config=patch_config,
+                geometry_batch_size=geometry_batch_size,
+                device=device,
+                rng=aug_rng,
+                num_augments=num_augments,
+                aug_trans_max_m=aug_trans_max_m,
+                aug_rot_max_deg=aug_rot_max_deg,
+            )
+            assert mesh_patches.ndim == 4
+            assert mesh_patches.shape[1] == 1 + num_augments
+        else:
+            mesh_patches, patch_stats = extract_depth_patches_mesh_gpu(
+                mesh_vertices_gpu=mesh_vertices_gpu,
+                mesh_triangles_gpu=mesh_triangles_gpu,
+                azimuth_poses=azimuth_poses,
+                radar_azimuths=radar_azimuths,
+                patch_config=patch_config,
+                geometry_batch_size=geometry_batch_size,
+                device=device,
+            )
+            assert mesh_patches.ndim == 3
         patch_time = perf_counter() - t0
 
         t0 = perf_counter()
         suffix = f"_{method_suffix}" if method_suffix else ""
+        method = f"mesh{suffix}_aug" if data_augment else f"mesh{suffix}"
         mesh_path = save_patches(
             seq_dir=seq.seq_root,
             patches=mesh_patches,
             fov_deg=patch_config["fov_deg"],
             radar_frame=radar_frame.frame,
-            method=f"mesh{suffix}",
+            method=method,
         )
         save_time = perf_counter() - t0
 
-        num_patches = max(len(azimuth_poses), 1)
+        num_patches = max(
+            mesh_patches.shape[0] * (mesh_patches.shape[1] if mesh_patches.ndim == 4 else 1),
+            1,
+        )
         print(
             f"Frame {radar_frame.frame} | total {perf_counter() - frame_start:.3f}s | "
             f"poses {pose_time:.3f}s | patches {patch_time:.3f}s | "
@@ -309,6 +379,12 @@ def run_sequence(
             f"avg covered pixels {patch_stats['covered_pixels'] / num_patches:.1f}"
         )
         print(f"  saved: {mesh_path}")
+        if data_augment:
+            print(
+                f"  saved augmented patches: shape {list(mesh_patches.shape)} | "
+                f"augmentation ranges: translation +/-{aug_trans_max_m} m, "
+                f"rotation +/-{aug_rot_max_deg} deg"
+            )
 
         radar_frame.unload_data()
         radar_frame_idx += 1
@@ -325,6 +401,11 @@ def main():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--fov-deg", type=float, default=6.0)
     parser.add_argument("--res-deg", type=float, default=0.1)
+    parser.add_argument("--data-augment", action="store_true")
+    parser.add_argument("--num-augments", type=int, default=4)
+    parser.add_argument("--aug-trans-max-m", type=float, default=0.01)
+    parser.add_argument("--aug-rot-max-deg", type=float, default=0.1)
+    parser.add_argument("--aug-seed", type=int, default=0)
     parser.add_argument(
         "--mesh-root",
         type=Path,
@@ -338,6 +419,12 @@ def main():
     args = parser.parse_args()
     if args.geometry_batch_size < 1:
         raise ValueError("--geometry-batch-size must be at least 1.")
+    if args.num_augments < 0:
+        raise ValueError("--num-augments must be non-negative.")
+    if args.aug_trans_max_m < 0.0:
+        raise ValueError("--aug-trans-max-m must be non-negative.")
+    if args.aug_rot_max_deg < 0.0:
+        raise ValueError("--aug-rot-max-deg must be non-negative.")
 
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -376,6 +463,11 @@ def main():
             geometry_batch_size=args.geometry_batch_size,
             device=device,
             method_suffix=args.method_suffix,
+            data_augment=args.data_augment,
+            num_augments=args.num_augments,
+            aug_trans_max_m=args.aug_trans_max_m,
+            aug_rot_max_deg=args.aug_rot_max_deg,
+            aug_seed=args.aug_seed,
         )
         if args.sequence_id is None:
             break

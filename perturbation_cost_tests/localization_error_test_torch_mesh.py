@@ -41,9 +41,9 @@ def make_perturbations():
     # )
 
     translation_offsets = {
-        "x": np.linspace(-0.5, 0.5, 21),
-        "y": np.linspace(-0.5, 0.5, 21),
-        "z": np.linspace(-0.5, 0.5, 21),
+        "x": np.linspace(-0.3, 0.3, 601),
+        "y": np.linspace(-0.3, 0.3, 601),
+        "z": np.linspace(-0.3, 0.3, 601),
         # "x": np.linspace(-0.2, 0.2, 41),
         # "y": np.linspace(-0.2, 0.2, 41),
         # "z": np.linspace(-0.2, 0.2, 41),
@@ -56,9 +56,9 @@ def make_perturbations():
         # "roll": [0.0],
         # "pitch": [0.0],
         # "yaw": [0.0],
-        "roll": np.linspace(-2.0, 2.0, 21),
-        "pitch": np.linspace(-2.0, 2.0, 21),
-        "yaw": np.linspace(-2.0, 2.0, 21),
+        "roll": np.linspace(-2.0, 2.0, 401),
+        "pitch": np.linspace(-2.0, 2.0, 401),
+        "yaw": np.linspace(-2.0, 2.0, 401),
         # "roll": np.linspace(-2.0, 2.0, 41),
         # "pitch": np.linspace(-2.0, 2.0, 41),
         # "yaw": np.linspace(-2.0, 2.0, 41),
@@ -102,6 +102,27 @@ def build_geometry_params(patch_config):
         max_depth_jump=patch_config["max_depth_jump"],
         fill_value=patch_config["fill_value"],
     )
+
+
+def cauchy_loss(residual, c=0.1):
+    """
+    Cauchy robust loss.
+
+    residual: numpy array
+    c: robust scale parameter, in the same units as residual intensity
+
+    rho(r) = 0.5 * c^2 * log(1 + (r / c)^2)
+    """
+    r_scaled = residual / c
+    return 0.5 * (c ** 2) * np.log1p(r_scaled ** 2)
+
+
+def robust_cost(residual, loss="mse", cauchy_c=0.1):
+    if loss == "mse":
+        return 0.5 * residual ** 2
+    if loss == "cauchy":
+        return cauchy_loss(residual, c=cauchy_c)
+    raise ValueError(f"Unknown loss: {loss}")
 
 
 def gaussian_kernel_1d(window_size=25, sigma=3.0):
@@ -162,6 +183,8 @@ def compute_covisibility_cost(
     window_size=9,
     lidar_threshold=1e-2,
     radar_threshold=1e-2,
+    loss="mse",
+    cauchy_c=0.1
 ):
     pred_cropped = preds_np[:, :obs_cropped.shape[1]]
     lidar_cropped = lidar_waveforms[:, :obs_cropped.shape[1]]
@@ -182,7 +205,7 @@ def compute_covisibility_cost(
         }
 
     residual = pred_cropped - obs_cropped
-    cost = 0.5 * float(np.mean(residual[roi_mask] ** 2))
+    cost = float(np.mean(robust_cost(residual[roi_mask], loss=loss, cauchy_c=cauchy_c)))
     stats = {
         "active_roi_bins": active_bins,
         "positive_center_bins": positive_bins,
@@ -190,10 +213,11 @@ def compute_covisibility_cost(
     return cost, roi_mask, stats
 
 
-def compute_plain_cost(preds_np, obs_cropped):
+def compute_plain_cost(preds_np, obs_cropped, loss, cauchy_c):
     pred_cropped = preds_np[:, :obs_cropped.shape[1]]
     residual = pred_cropped - obs_cropped
-    return float(np.mean(residual ** 2))
+    cost = float(np.mean(robust_cost(residual, loss=loss, cauchy_c=cauchy_c)))
+    return cost
 
 
 def print_sorted_costs(csv_path):
@@ -341,6 +365,8 @@ def run_sequence(
     geometry_batch_size=16,
     use_covisibility=False,
     use_gaussian_blur=False,
+    loss="mse",
+    cauchy_c=0.1
 ):
     print(f"SequenceID: {seq.ID}")
     print(f"Number Radar Frames: {len(seq.radar_frames)}")
@@ -430,7 +456,7 @@ def run_sequence(
         if use_gaussian_blur:
             filtered_polar = gaussian_filter1d(
                 filtered_polar,
-                sigma=15.0,
+                sigma=30.0,
                 axis=1,
                 mode="reflect",
             )
@@ -480,9 +506,11 @@ def run_sequence(
                     window_size=covis_window_size,
                     lidar_threshold=lidar_threshold,
                     radar_threshold=radar_threshold,
+                    loss=loss,
+                    cauchy_c=cauchy_c
                 )
             else:
-                cost = compute_plain_cost(preds_np, obs_cropped)
+                cost = compute_plain_cost(preds_np, obs_cropped, loss, cauchy_c)
                 roi_mask = np.ones_like(obs_cropped, dtype=bool)
                 cost_stats = {
                     "active_roi_bins": int(np.count_nonzero(roi_mask)),
@@ -530,8 +558,8 @@ def main():
         description="Plot perturbation costs using cached NKSR meshes and the fast mesh forward chain."
     )
     parser.add_argument("--radar-start-frame", type=int, default=65)
-    parser.add_argument("--radar-end-frame", type=int, default=None)
-    parser.add_argument("--sequence-id", default=None)
+    parser.add_argument("--radar-end-frame", type=int, default=665)
+    parser.add_argument("--sequence-id", default="boreas-2024-12-03-12-54")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--geometry-batch-size", type=int, default=400)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -540,6 +568,8 @@ def main():
     parser.add_argument("--mesh-root", type=Path, default=None)
     parser.add_argument("--model-weights", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--loss", choices=["mse", "cauchy"], default="mse")
+    parser.add_argument("--cauchy-c", type=float, default=0.1)
     args = parser.parse_args()
 
     if args.batch_size < 1:
@@ -569,10 +599,13 @@ def main():
     mesh_root = args.mesh_root or (
         Path(boreas_vtr_wrapper_dir) / "postprocessing" / "submap_meshes"
     )
-    output_dir = Path("perturbation_cost_tests") / f"{args.output_dir}" or (
-        Path("perturbation_cost_tests")
-        / f"torch_mesh_covis_{int(args.covisibility)}_blur_{int(args.gaussian_blur)}"
-    )
+    if args.output_dir is None:
+        output_dir = (
+            Path("perturbation_cost_tests")
+            / f"torch_mesh_loss_{args.loss}_cauchy_{args.cauchy_c}_covis_{int(args.covisibility)}_blur_{int(args.gaussian_blur)}"
+        )
+    else:
+        output_dir = Path("perturbation_cost_tests") / f"{args.output_dir}"
 
     bd = BoreasDataset(boreas_data)
     model = load_radar_translator_model(weights_path, device)
@@ -606,6 +639,8 @@ def main():
             geometry_batch_size=args.geometry_batch_size,
             use_covisibility=args.covisibility,
             use_gaussian_blur=args.gaussian_blur,
+            loss=args.loss,
+            cauchy_c=args.cauchy_c
         )
 
 
