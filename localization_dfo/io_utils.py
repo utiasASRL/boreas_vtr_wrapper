@@ -32,6 +32,22 @@ def get_submap_vertices(graph_dir):
     return graph, submap_vertices
 
 
+def get_path_vertices_with_submaps(graph_dir):
+    factory = Rosbag2GraphFactory(graph_dir)
+    graph = factory.buildGraph()
+    print(f"Graph {graph} {graph.number_of_vertices} vertices and {graph.number_of_edges} edges")
+
+    g_utils.set_world_frame(graph, graph.root)
+    v_start = graph.get_vertex((0, 0))
+
+    candidates = []
+    for vertex, _ in TemporalIterator(v_start):
+        map_ptr = vertex.get_data("pointmap_ptr")
+        candidates.append((vertex, graph.get_vertex(map_ptr.map_vid)))
+
+    return graph, candidates
+
+
 def build_patch_config(
     fov_deg,
     res_deg,
@@ -136,7 +152,7 @@ def cen_filter_2d(polar_image, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5):
     return y
 
 
-def build_lidar_to_robot_transform(seq):
+def build_T_lidar_robot(seq):
     T_wheel_robot_np = np.array([
         [0.0, -1.0, 0.0, 0.0],
         [1.0, 0.0, 0.0, 0.0],
