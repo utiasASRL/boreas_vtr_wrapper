@@ -337,6 +337,7 @@ def run_sequence(
     device,
     results_csv_path,
     mesh_root,
+    random_seed,
 ):
     print(f"Map SequenceID: {map_seq.ID}")
     print(f"Localization SequenceID: {loc_seq.ID}")
@@ -356,6 +357,7 @@ def run_sequence(
     loaded_mesh_submap_stamp_us = None
     mesh_vertices_gpu = None
     mesh_triangles_gpu = None
+    rng = np.random.default_rng(random_seed)
 
     while radar_frame_idx < end_frame + 1:
         radar_frame = loc_seq.get_radar(radar_frame_idx)
@@ -373,7 +375,10 @@ def run_sequence(
         T_enu_radar = radar_frame.pose
         odom_transforms = np.array([T_enu_radar @ T_i for T_i in azimuth_poses])
 
-        T_offset = make_delta_T(translation=np.array([0.1, 0.1, 0.1]), rpy_deg=np.array([1.0, 1.0, 1.0]))
+        T_offset = make_delta_T(
+            translation=rng.uniform(-0.2, 0.2, size=3),
+            rpy_deg=rng.uniform(-2.0, 2.0, size=3),
+        )
         T_gt = np.linalg.inv(T_enu_radar)
         T_init = T_offset @ T_gt
 
@@ -475,6 +480,7 @@ def main():
     parser.add_argument("--loc-sequence", required=True)
     parser.add_argument("--radar-start-frame", type=int, default=65)
     parser.add_argument("--radar-end-frame", type=int, default=None)
+    parser.add_argument("--random-seed", type=int, default=0)
     output_mode = parser.add_mutually_exclusive_group()
     output_mode.add_argument("--append", action="store_true")
     output_mode.add_argument("--overwrite", action="store_true")
@@ -535,6 +541,7 @@ def main():
         device=device,
         results_csv_path=results_csv_path,
         mesh_root=args.mesh_root,
+        random_seed=args.random_seed,
     )
 
 
