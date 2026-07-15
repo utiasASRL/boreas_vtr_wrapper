@@ -25,6 +25,13 @@ from localization_dfo.mesh_cost import (
     ResidualBuildOptions,
     compute_radar_cost_only_fast,
     left_se3_retract,
+    torch_mesh_depth_geometry_batch,
+)
+from localization_dfo.optix_backend import (
+    OptixDepthBackend,
+    compare_depth_patches,
+    compute_optix_cost,
+    print_comparison_metrics,
 )
 from localization_dfo.optimizer import ObjectiveLogger, extract_best_from_result, run_imfil_direct
 from localization_dfo.radar_translator_cnn import RadarTranslatorCNN
@@ -52,6 +59,7 @@ RESULT_FIELDNAMES = [
 ]
 
 MESH_TIMING_KEYS = [
+    ("optix_trace_time_s", "OptiX trace"),
     ("point_transform_time_s", "point transform"),
     ("cartesian_frustum_mask_time_s", "cartesian frustum mask"),
     ("candidate_face_selection_time_s", "candidate face selection"),
@@ -326,6 +334,21 @@ def summarize_cost_call(result, wall_time_s):
     }
 
 
+def summarize_optix_cost_call(cost, timing, wall_time_s, patch_count):
+    depth_breakdown = {key: 0.0 for key, _ in MESH_TIMING_KEYS}
+    depth_breakdown["optix_trace_time_s"] = timing["optix_trace_time_s"]
+    return {
+        "wall_time_s": wall_time_s,
+        "cost": cost,
+        "patch_count": patch_count,
+        "depth_patch_generation_time_s": timing["optix_trace_time_s"],
+        "depth_patch_breakdown": depth_breakdown,
+        "raster_breakdown": {key: 0.0 for key, _ in RASTER_TIMING_KEYS},
+        "model_inference_time_s": timing["model_inference_time_s"],
+        "cost_compute_time_s": timing["cost_compute_time_s"],
+    }
+
+
 def run_sequence(
     map_seq,
     loc_seq,
@@ -338,6 +361,9 @@ def run_sequence(
     results_csv_path,
     mesh_root,
     random_seed,
+    depth_backend,
+    compare_max_calls,
+    imfil_budget,
 ):
     print(f"Map SequenceID: {map_seq.ID}")
     print(f"Localization SequenceID: {loc_seq.ID}")
@@ -357,7 +383,21 @@ def run_sequence(
     loaded_mesh_submap_stamp_us = None
     mesh_vertices_gpu = None
     mesh_triangles_gpu = None
+    mesh_triangles_long = None
     rng = np.random.default_rng(random_seed)
+
+    geom = geometry_params_from_config(patch_config)
+    residual_options = ResidualBuildOptions(
+        device=str(device),
+        model_output_activation="sigmoid",
+        candidate_batch_size=400,
+        geometry_batch_size=400,
+    )
+    optix_backend = (
+        OptixDepthBackend(geom, device)
+        if depth_backend in {"optix", "compare"}
+        else None
+    )
 
     while radar_frame_idx < end_frame + 1:
         radar_frame = loc_seq.get_radar(radar_frame_idx)
@@ -406,38 +446,90 @@ def run_sequence(
                 lidar_pose=lidar_frame.pose,
                 device=device,
             )
+            if depth_backend in {"torch_mesh", "compare"}:
+                mesh_triangles_long = mesh_triangles_gpu.to(torch.long)
+            if optix_backend is not None:
+                optix_backend.set_mesh(mesh_vertices_gpu, mesh_triangles_gpu)
             loaded_mesh_submap_stamp_us = submap_stamp_us
 
         shifted_polar = correct_offsets(radar_frame, radar_frame_idx, loc_seq)
         filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)
 
         radar_polar_cropped = filtered_polar[:, :2736] / 0.5613
-        geom = geometry_params_from_config(patch_config)
-        residual_options = ResidualBuildOptions(
-            device=str(device),
-            model_output_activation="sigmoid",
-            candidate_batch_size=400,
-            geometry_batch_size=400,
-        )
+        radar_polar_cropped_gpu = None
+        if optix_backend is not None:
+            if len(radar_polar_cropped) != len(odom_transforms):
+                raise ValueError(
+                    f"Radar rows and odometry pose counts differ: "
+                    f"{len(radar_polar_cropped)} != {len(odom_transforms)}."
+                )
+            radar_polar_cropped_gpu = torch.as_tensor(
+                radar_polar_cropped,
+                device=device,
+                dtype=torch.float32,
+            ).contiguous()
+            optix_backend.set_scan(odom_transforms, radar_azimuths)
 
         cost_call_diagnostics = []
+        comparison_calls = 0
 
         def cost_fn(eps):
+            nonlocal comparison_calls
             t_call = perf_counter()
             T_current = left_se3_retract(T=T_init, delta=eps)
-            result = compute_radar_cost_only_fast(
-                P_v=mesh_vertices_gpu,
-                mesh_triangles=mesh_triangles_gpu,
-                T=T_current,
-                odom_transforms=odom_transforms,
-                m_obs_all=radar_polar_cropped,
-                model=model,
-                geom=geom,
-                options=residual_options,
-                radar_azimuths=radar_azimuths,
+            if depth_backend == "torch_mesh":
+                result = compute_radar_cost_only_fast(
+                    P_v=mesh_vertices_gpu,
+                    mesh_triangles=mesh_triangles_long,
+                    T=T_current,
+                    odom_transforms=odom_transforms,
+                    m_obs_all=radar_polar_cropped,
+                    model=model,
+                    geom=geom,
+                    options=residual_options,
+                    radar_azimuths=radar_azimuths,
+                )
+                cost_call_diagnostics.append(
+                    summarize_cost_call(result, perf_counter() - t_call)
+                )
+                return result.cost
+
+            cost, depth_optix, timing = compute_optix_cost(
+                optix_backend,
+                T_current,
+                radar_polar_cropped_gpu,
+                model,
+                residual_options.model_output_activation,
             )
-            cost_call_diagnostics.append(summarize_cost_call(result, perf_counter() - t_call))
-            return result.cost
+            if depth_backend == "compare" and comparison_calls < compare_max_calls:
+                mesh_outputs, _ = torch_mesh_depth_geometry_batch(
+                    P_v=mesh_vertices_gpu,
+                    triangles=mesh_triangles_long,
+                    T=T_current,
+                    odom_batch=odom_transforms,
+                    radar_azimuth_batch=radar_azimuths,
+                    geom=geom,
+                    device=device,
+                )
+                depth_mesh_gpu = torch.as_tensor(
+                    np.stack([output[0] for output in mesh_outputs]),
+                    device=device,
+                    dtype=torch.float32,
+                )
+                print_comparison_metrics(
+                    compare_depth_patches(depth_optix, depth_mesh_gpu)
+                )
+                comparison_calls += 1
+
+            cost_call_diagnostics.append(
+                summarize_optix_cost_call(
+                    cost,
+                    timing,
+                    perf_counter() - t_call,
+                    optix_backend.pose_count,
+                )
+            )
+            return cost
 
         logger = ObjectiveLogger(cost_fn)
         eps0 = np.zeros(6)
@@ -455,7 +547,7 @@ def run_sequence(
         bounds[3:] = np.deg2rad(bounds[3:])
 
         t_opt = perf_counter()
-        result, _ = run_imfil_direct("imfil", logger, eps0, bounds, 120)
+        result, _ = run_imfil_direct("imfil", logger, eps0, bounds, imfil_budget)
         optimization_time_s = perf_counter() - t_opt
         eps_best, _ = extract_best_from_result(result, logger)
         T_hat = left_se3_retract(T=T_init, delta=eps_best)
@@ -470,17 +562,25 @@ def run_sequence(
 
         radar_frame.unload_data()
         print("radar frame unloaded!")
-        radar_frame_idx += 100
+        radar_frame_idx += 3
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run torch-mesh DFO radar-lidar localization.")
+    parser = argparse.ArgumentParser(description="Run DFO radar-lidar localization.")
     parser.add_argument("--experiment-name", required=True)
     parser.add_argument("--map-sequence", required=True)
     parser.add_argument("--loc-sequence", required=True)
     parser.add_argument("--radar-start-frame", type=int, default=65)
     parser.add_argument("--radar-end-frame", type=int, default=None)
     parser.add_argument("--random-seed", type=int, default=0)
+    parser.add_argument(
+        "--depth-backend",
+        choices=["torch_mesh", "optix", "compare"],
+        default="torch_mesh",
+        help="compare checks the first calls, then continues optimization with OptiX.",
+    )
+    parser.add_argument("--compare-max-calls", type=int, default=1)
+    parser.add_argument("--imfil-budget", type=int, default=120)
     output_mode = parser.add_mutually_exclusive_group()
     output_mode.add_argument("--append", action="store_true")
     output_mode.add_argument("--overwrite", action="store_true")
@@ -491,19 +591,27 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.compare_max_calls < 0:
+        raise ValueError("--compare-max-calls must be nonnegative.")
+    if args.imfil_budget < 1:
+        raise ValueError("--imfil-budget must be positive.")
+
     experiment_name = Path(args.experiment_name).name
     if experiment_name != args.experiment_name or experiment_name in {"", ".", ".."}:
         raise ValueError("--experiment-name must be a simple filename-safe name.")
 
     boreas_vtr_wrapper_dir = os.getenv("VTRROOT")
     boreas_data = os.getenv("VTRRDATA")
+    vtr_results = Path(
+        os.getenv("VTRRESULT", Path(boreas_vtr_wrapper_dir or ".") / "results")
+    )
     if boreas_vtr_wrapper_dir is None:
         raise RuntimeError("VTRROOT must be set.")
     if boreas_data is None:
         raise RuntimeError("VTRRDATA must be set.")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    lidar_results_dir = os.path.join(boreas_vtr_wrapper_dir, "results/lidar")
+    lidar_results_dir = vtr_results / "lidar"
     weights_path = os.path.join(
         boreas_vtr_wrapper_dir,
         "model_dev/model_weights/6_deg_attentional_skip_bigger/best.pth",
@@ -523,7 +631,7 @@ def main():
     map_seq = dataset.get_seq_from_ID(args.map_sequence)
     loc_seq = dataset.get_seq_from_ID(args.loc_sequence)
     results_csv_path = (
-        Path(boreas_vtr_wrapper_dir)
+        vtr_results
         / "localization_dfo"
         / "results"
         / loc_seq.ID
@@ -542,6 +650,9 @@ def main():
         results_csv_path=results_csv_path,
         mesh_root=args.mesh_root,
         random_seed=args.random_seed,
+        depth_backend=args.depth_backend,
+        compare_max_calls=args.compare_max_calls,
+        imfil_budget=args.imfil_budget,
     )
 
 

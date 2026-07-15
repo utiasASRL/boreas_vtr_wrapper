@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import os
-from collections import defaultdict
 from pathlib import Path
 from time import perf_counter
 
@@ -13,18 +12,92 @@ from pyboreas import BoreasDataset
 from pyboreas.utils.odometry import interpolate_poses
 from pyboreas.utils.utils import get_inverse_tf
 from pylgmath import Transformation
+from vtr_pose_graph.graph_iterators import TemporalIterator
+import vtr_pose_graph.graph_utils as g_utils
+from vtr_utils.bag_file_parsing import Rosbag2GraphFactory
 from vtr_utils.plot_utils import convert_points_to_frame
 from perturbation_cost_tests.perturbation_utils import make_delta_T
 
-from localization_fast.gauss_newton_localization_fast import (
-    GeometryParams,
-    torch_mesh_depth_geometry_batch,
-)
-from postprocessing.submap_to_depth_image_multiprocess_refactored import (
-    build_lidar_to_robot_transform,
-    build_patch_config,
-    get_submap_vertices,
-)
+from localization_dfo.mesh_cost import GeometryParams
+from localization_dfo.optix_backend import OptixDepthBackend
+
+
+def get_submap_vertices(graph_dir):
+    factory = Rosbag2GraphFactory(graph_dir)
+    graph = factory.buildGraph()
+    print(
+        f"Graph {graph} has {graph.number_of_vertices} vertices and "
+        f"{graph.number_of_edges} edges"
+    )
+
+    g_utils.set_world_frame(graph, graph.root)
+    v_start = graph.get_vertex((0, 0))
+    submap_vertices = []
+    curr_submap_vid = None
+    for vertex, _ in TemporalIterator(v_start):
+        map_ptr = vertex.get_data("pointmap_ptr")
+        teach_v = graph.get_vertex(map_ptr.map_vid)
+        if curr_submap_vid != teach_v.id:
+            submap_vertices.append(teach_v)
+            curr_submap_vid = teach_v.id
+
+    return graph, submap_vertices
+
+
+def build_patch_config(
+    fov_deg,
+    res_deg,
+    min_range=0.0,
+    max_uv_edge_length=None,
+    max_depth_jump=2.0,
+):
+    hfov = np.deg2rad(fov_deg)
+    vfov = np.deg2rad(fov_deg)
+    dtheta = np.deg2rad(res_deg)
+    dphi = np.deg2rad(res_deg)
+    width = int(np.round(hfov / dtheta)) + 1
+    height = int(np.round(vfov / dphi)) + 1
+    if width % 2 != 1 or height % 2 != 1:
+        raise ValueError("Patch dimensions must be odd so there is an exact center pixel.")
+
+    uu, vv = np.meshgrid(
+        np.arange(width, dtype=np.float32),
+        np.arange(height, dtype=np.float32),
+    )
+    return {
+        "hfov": hfov,
+        "vfov": vfov,
+        "theta_min": -0.5 * hfov,
+        "theta_max": 0.5 * hfov,
+        "phi_min": -0.5 * vfov,
+        "phi_max": 0.5 * vfov,
+        "dtheta": dtheta,
+        "dphi": dphi,
+        "width": width,
+        "height": height,
+        "query_uv": np.stack([uu.ravel(), vv.ravel()], axis=1),
+        "min_range": min_range,
+        "max_uv_edge_length": max_uv_edge_length,
+        "max_depth_jump": max_depth_jump,
+        "fill_value": 0.0,
+    }
+
+
+def build_lidar_to_robot_transform(seq):
+    """Return the static transform that maps robot-frame points into LiDAR."""
+    T_wheel_robot = Transformation(
+        T_ba=np.array(
+            [
+                [0.0, -1.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        )
+    )
+    T_applanix_wheel = Transformation(T_ba=seq.calib.T_applanix_wheel)
+    T_applanix_lidar = Transformation(T_ba=seq.calib.T_applanix_lidar)
+    return T_applanix_lidar.inverse() * T_applanix_wheel * T_wheel_robot
 
 
 def save_patches(seq_dir, patches, fov_deg, radar_frame, method):
@@ -109,12 +182,12 @@ def load_submap_mesh_to_enu(
         vertices_enu.T,
         device=device,
         dtype=torch.float32,
-    )
+    ).contiguous()
     triangles_gpu = torch.as_tensor(
         triangles,
         device=device,
-        dtype=torch.long,
-    )
+        dtype=torch.int32,
+    ).contiguous()
     if device.type == "cuda":
         torch.cuda.synchronize(device)
     transform_upload_time = perf_counter() - t0
@@ -129,87 +202,35 @@ def load_submap_mesh_to_enu(
     }
 
 
-def extract_depth_patches_mesh_gpu(
-    mesh_vertices_gpu,
-    mesh_triangles_gpu,
-    azimuth_poses,
-    radar_azimuths,
-    patch_config,
-    geometry_batch_size,
-    device,
-):
-    geom = geometry_params_from_patch_config(patch_config)
-    num_azimuths = len(azimuth_poses)
-    mesh_patches = np.empty(
-        (num_azimuths, patch_config["height"], patch_config["width"]),
-        dtype=np.float32,
-    )
-    stats = defaultdict(float)
-
-    for start in range(0, num_azimuths, geometry_batch_size):
-        stop = min(start + geometry_batch_size, num_azimuths)
-        batch_indices = slice(start, stop)
-
-        t0 = perf_counter()
-        mesh_outputs, gpu_timing = torch_mesh_depth_geometry_batch(
-            P_v=mesh_vertices_gpu,
-            triangles=mesh_triangles_gpu,
-            T=np.eye(4),
-            odom_batch=azimuth_poses[batch_indices],
-            radar_azimuth_batch=radar_azimuths[batch_indices],
-            geom=geom,
-            device=device,
-            with_jacobian=False,
-        )
-        stats["gpu_mesh_wall"] += perf_counter() - t0
-
-        batch_count = stop - start
-        for key, value in gpu_timing.items():
-            stats[key] += value * batch_count
-
-        for local_idx, (depth_patch, _, mesh_stats) in enumerate(mesh_outputs):
-            output_idx = start + local_idx
-            mesh_patches[output_idx] = depth_patch
-            for key, value in mesh_stats.items():
-                stats[key] += value
-
-    return mesh_patches, dict(stats)
+def extract_depth_patches_optix(tracer, current_transform):
+    t0 = perf_counter()
+    depth_gpu = tracer.trace(current_transform)
+    depth_patches = depth_gpu.cpu().numpy()
+    return depth_patches, {
+        "optix_wall": perf_counter() - t0,
+        "hit_pixels": int(np.count_nonzero(depth_patches > 0.0)),
+    }
 
 
-def extract_augmented_depth_patches_mesh_gpu(
-    mesh_vertices_gpu,
-    mesh_triangles_gpu,
-    azimuth_poses,
-    radar_azimuths,
-    patch_config,
-    geometry_batch_size,
-    device,
+def extract_augmented_depth_patches_optix(
+    tracer,
     rng,
     num_augments,
     aug_trans_max_m,
     aug_rot_max_deg,
 ):
     all_patches = []
-    stats = defaultdict(float)
+    stats = {"optix_wall": 0.0, "hit_pixels": 0}
 
     for aug_idx in range(num_augments + 1):
         if aug_idx == 0:
-            poses = azimuth_poses
+            current_transform = np.eye(4)
         else:
             translation = rng.uniform(-aug_trans_max_m, aug_trans_max_m, size=3)
             rpy_deg = rng.uniform(-aug_rot_max_deg, aug_rot_max_deg, size=3)
-            delta_T = make_delta_T(translation=translation, rpy_deg=rpy_deg)
-            poses = np.asarray([delta_T @ T for T in azimuth_poses])
+            current_transform = make_delta_T(translation=translation, rpy_deg=rpy_deg)
 
-        patches, patch_stats = extract_depth_patches_mesh_gpu(
-            mesh_vertices_gpu=mesh_vertices_gpu,
-            mesh_triangles_gpu=mesh_triangles_gpu,
-            azimuth_poses=poses,
-            radar_azimuths=radar_azimuths,
-            patch_config=patch_config,
-            geometry_batch_size=geometry_batch_size,
-            device=device,
-        )
+        patches, patch_stats = extract_depth_patches_optix(tracer, current_transform)
         all_patches.append(patches)
         for key, value in patch_stats.items():
             stats[key] += value
@@ -220,11 +241,11 @@ def extract_augmented_depth_patches_mesh_gpu(
 def run_sequence(
     seq,
     lidar_results_dir,
+    output_root,
     mesh_root,
     radar_start_frame,
     radar_end_frame,
     patch_config,
-    geometry_batch_size,
     device,
     method_suffix,
     data_augment=False,
@@ -252,6 +273,8 @@ def run_sequence(
     mesh_vertices_gpu = None
     mesh_triangles_gpu = None
     aug_rng = np.random.default_rng(aug_seed)
+    geom = geometry_params_from_patch_config(patch_config)
+    tracer = OptixDepthBackend(geom, device)
 
     while (
         submap_vertices_idx < len(submap_vertices) - 1
@@ -287,6 +310,7 @@ def run_sequence(
                     device=device,
                 )
             )
+            tracer.set_mesh(mesh_vertices_gpu, mesh_triangles_gpu)
             loaded_submap_stamp_us = submap_stamp_us
 
         frame_start = perf_counter()
@@ -305,17 +329,12 @@ def run_sequence(
         azimuth_poses = np.asarray(interpolate_poses(poses, times, query_times))
         radar_azimuths = np.asarray(radar_frame.azimuths).reshape(-1)
         pose_time = perf_counter() - t0
+        tracer.set_scan(azimuth_poses, radar_azimuths)
 
         t0 = perf_counter()
         if data_augment:
-            mesh_patches, patch_stats = extract_augmented_depth_patches_mesh_gpu(
-                mesh_vertices_gpu=mesh_vertices_gpu,
-                mesh_triangles_gpu=mesh_triangles_gpu,
-                azimuth_poses=azimuth_poses,
-                radar_azimuths=radar_azimuths,
-                patch_config=patch_config,
-                geometry_batch_size=geometry_batch_size,
-                device=device,
+            mesh_patches, patch_stats = extract_augmented_depth_patches_optix(
+                tracer=tracer,
                 rng=aug_rng,
                 num_augments=num_augments,
                 aug_trans_max_m=aug_trans_max_m,
@@ -324,23 +343,15 @@ def run_sequence(
             assert mesh_patches.ndim == 4
             assert mesh_patches.shape[1] == 1 + num_augments
         else:
-            mesh_patches, patch_stats = extract_depth_patches_mesh_gpu(
-                mesh_vertices_gpu=mesh_vertices_gpu,
-                mesh_triangles_gpu=mesh_triangles_gpu,
-                azimuth_poses=azimuth_poses,
-                radar_azimuths=radar_azimuths,
-                patch_config=patch_config,
-                geometry_batch_size=geometry_batch_size,
-                device=device,
-            )
+            mesh_patches, patch_stats = extract_depth_patches_optix(tracer, np.eye(4))
             assert mesh_patches.ndim == 3
         patch_time = perf_counter() - t0
 
         t0 = perf_counter()
         suffix = f"_{method_suffix}" if method_suffix else ""
-        method = f"mesh{suffix}_aug" if data_augment else f"mesh{suffix}"
+        method = f"optix{suffix}_aug" if data_augment else f"optix{suffix}"
         mesh_path = save_patches(
-            seq_dir=seq.seq_root,
+            seq_dir=Path(output_root) / seq.ID,
             patches=mesh_patches,
             fov_deg=patch_config["fov_deg"],
             radar_frame=radar_frame.frame,
@@ -363,20 +374,8 @@ def run_sequence(
                 f"robot->ENU/GPU {mesh_load_stats['mesh_robot_to_enu_upload']:.3f}s"
             )
         print(
-            f"  mesh GPU wall {patch_stats['gpu_mesh_wall']:.3f}s | "
-            f"transform {patch_stats['point_transform_time_s']:.3f}s | "
-            f"frustum {patch_stats['cartesian_frustum_mask_time_s']:.3f}s | "
-            f"face select {patch_stats['candidate_face_selection_time_s']:.3f}s | "
-            f"projection {patch_stats['selected_geometry_time_s']:.3f}s | "
-            f"raster {patch_stats['mesh_rasterization_time_s']:.3f}s | "
-            f"GPU->CPU {patch_stats['geometry_to_cpu_time_s']:.3f}s"
-        )
-        print(
-            f"  avg selected vertices {patch_stats['selected_vertices'] / num_patches:.1f} | "
-            f"avg candidate faces {patch_stats['candidate_faces'] / num_patches:.1f} | "
-            f"avg triangle-pixel tests "
-            f"{patch_stats['triangle_pixel_tests'] / num_patches:.1f} | "
-            f"avg covered pixels {patch_stats['covered_pixels'] / num_patches:.1f}"
+            f"  OptiX/copy wall {patch_stats['optix_wall']:.3f}s | "
+            f"avg hit pixels {patch_stats['hit_pixels'] / num_patches:.1f}"
         )
         print(f"  saved: {mesh_path}")
         if data_augment:
@@ -395,16 +394,15 @@ def main():
         description="Generate radar-azimuth depth patches from cached submap meshes."
     )
     parser.add_argument("--radar-start-frame", type=int, default=65)
-    parser.add_argument("--radar-end-frame", type=int, default=None)
+    parser.add_argument("--radar-end-frame", type=int, default=300)
     parser.add_argument("--sequence-id", default=None)
-    parser.add_argument("--geometry-batch-size", type=int, default=400)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--fov-deg", type=float, default=6.0)
     parser.add_argument("--res-deg", type=float, default=0.1)
     parser.add_argument("--data-augment", action="store_true")
-    parser.add_argument("--num-augments", type=int, default=4)
+    parser.add_argument("--num-augments", type=int, default=2)
     parser.add_argument("--aug-trans-max-m", type=float, default=0.01)
-    parser.add_argument("--aug-rot-max-deg", type=float, default=0.1)
+    parser.add_argument("--aug-rot-max-deg", type=float, default=0.05)
     parser.add_argument("--aug-seed", type=int, default=0)
     parser.add_argument(
         "--mesh-root",
@@ -413,12 +411,10 @@ def main():
     )
     parser.add_argument(
         "--method-suffix",
-        default="gpu",
+        default="optix",
         help="Suffix for the output patch folder.",
     )
     args = parser.parse_args()
-    if args.geometry_batch_size < 1:
-        raise ValueError("--geometry-batch-size must be at least 1.")
     if args.num_augments < 0:
         raise ValueError("--num-augments must be non-negative.")
     if args.aug_trans_max_m < 0.0:
@@ -427,17 +423,24 @@ def main():
         raise ValueError("--aug-rot-max-deg must be non-negative.")
 
     device = torch.device(args.device)
-    if device.type == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA was requested but is not available.")
+    if device.type != "cuda" or not torch.cuda.is_available():
+        raise RuntimeError("OptiX depth generation requires a CUDA device.")
 
     boreas_vtr_wrapper_dir = os.getenv("VTRROOT")
     boreas_data = os.getenv("VTRRDATA")
+    boreas_output = os.getenv("BOREAS_OUTPUT_ROOT")
+    vtr_results = os.getenv("VTRRESULT")
     if boreas_vtr_wrapper_dir is None:
         raise RuntimeError("VTRROOT must be set.")
     if boreas_data is None:
         raise RuntimeError("VTRRDATA must be set.")
+    if boreas_output is None:
+        raise RuntimeError("BOREAS_OUTPUT_ROOT must be set.")
 
-    lidar_results_dir = os.path.join(boreas_vtr_wrapper_dir, "results/lidar")
+    lidar_results_dir = os.path.join(
+        vtr_results or os.path.join(boreas_vtr_wrapper_dir, "results"),
+        "lidar",
+    )
     dataset = BoreasDataset(boreas_data)
     patch_config = build_patch_config(
         fov_deg=args.fov_deg,
@@ -456,11 +459,11 @@ def main():
         run_sequence(
             seq=seq,
             lidar_results_dir=lidar_results_dir,
+            output_root=boreas_output,
             mesh_root=args.mesh_root,
             radar_start_frame=args.radar_start_frame,
             radar_end_frame=args.radar_end_frame,
             patch_config=patch_config,
-            geometry_batch_size=args.geometry_batch_size,
             device=device,
             method_suffix=args.method_suffix,
             data_augment=args.data_augment,

@@ -34,7 +34,7 @@ pip install \
   -f https://data.pyg.org/whl/torch-2.7.0+cu118.html
 
 pip install \
-  "python-pycg>=1.0.1" \
+  "python-pycg[all]>=1.0.1" \
   pykdtree \
   omegaconf \
   ninja \

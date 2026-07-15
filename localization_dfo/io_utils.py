@@ -200,8 +200,12 @@ def load_submap_mesh_to_enu(mesh_root, sequence_id, submap, T_lidar_robot, lidar
     vertices_lidar = convert_points_to_frame(vertices_robot.T, T_lidar_robot)
     T_enu_lidar = Transformation(T_ba=lidar_pose)
     vertices_enu = convert_points_to_frame(vertices_lidar, T_enu_lidar)
-    vertices_gpu = torch.as_tensor(vertices_enu.T, device=device, dtype=torch.float32)
-    triangles_gpu = torch.as_tensor(triangles, device=device, dtype=torch.long)
+    vertices_gpu = torch.as_tensor(
+        vertices_enu.T, device=device, dtype=torch.float32
+    ).contiguous()
+    triangles_gpu = torch.as_tensor(
+        triangles, device=device, dtype=torch.int32
+    ).contiguous()
     if torch.device(device).type == "cuda":
         torch.cuda.synchronize(device)
     transform_upload_time = perf_counter() - t0

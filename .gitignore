@@ -26,6 +26,7 @@ results/
 
 #
 .vscode/
+scripts/paths.env
 
 # Neptune
 *.neptune

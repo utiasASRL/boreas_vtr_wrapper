@@ -5,11 +5,26 @@ This package contains testing code for lidar and radar pipeline. Download it do 
 ```Bash
 git clone git@github.com:utiasASRL/boreas_vtr_wrapper.git
 cd boreas_vtr_wrapper
-git checkout script_update
+git checkout radar_lidar_modeling
 git submodule update --init --recursive
 ```
 
 The recursive submodule update also checks out NKSR under `external/NKSR`.
+
+## Configure host paths
+
+Download and extract an NVIDIA OptiX SDK on the host. The SDK is not included
+in this repository. Use OptiX 9.1 on hosts with a sufficiently recent driver;
+an R535 host such as Obelisk requires OptiX 8.
+
+Create the machine-local path file:
+
+```Bash
+cp scripts/paths.env.example scripts/paths.env
+```
+
+Set the read-only Boreas input root, writable output root, and extracted OptiX
+SDK root in `scripts/paths.env`. This file is ignored by Git.
 
 ## Build boreas_vtr_wrapper Docker Image
 
@@ -27,7 +42,8 @@ This will either attach to a boreas_vtr_wrapper container that's already running
 bash scripts/run_docker.sh
 ```
 
-FYI: This will always run `entrypoint.sh` which tries to source the python venv (see below). Also, the container expects Boreas sequences to be stored at `$VTRRDATA`. If your data is not stored here, then consider mounting a volume in the shell script like `-v host_path:container_path:ro`. In `setup_container.sh`, point `$VTRRESULT` and `$VTRRDATA` to where you want to store results and data.
+This mounts Boreas input read-only at `$VTRRDATA`, writable output at
+`$BOREAS_OUTPUT_ROOT`, and the OptiX SDK read-only at `$OPTIX_SDK_ROOT`.
 
 ## Build and Install VT&R3 + boreas_vtr_wrapper
 
@@ -46,6 +62,27 @@ Within the running container
 ```Bash
 bash scripts/create_venv.sh
 ```
+
+Exit and re-enter the container so `setup_container.sh` activates the new
+environment:
+
+```Bash
+exit
+bash scripts/run_docker.sh
+```
+
+## Build the OptiX extension
+
+Inside the container, after creating the Python environment:
+
+```Bash
+bash scripts/build_optix_extension.sh
+```
+
+The script checks the driver/SDK generation, builds the repository-owned
+tracer sources, and runs the standalone and PyTorch binding smoke tests. The
+module is placed under `build/optix_range_tracer/python` and is added to
+`PYTHONPATH` automatically by `scripts/setup_container.sh`.
 
 ## Install NKSR into an existing virtual environment
 
@@ -148,9 +185,5 @@ for odometry and at
 `${VTRRESULT}/${SENSOR}/${ODO_INPUT}/${LOC_INPUT}/<some name based on time>.log`
 
 for localization, where `${VTRRESULT}` is set in `setup_container.sh`. After the evaluation of the tests is complete, you should see the output in the terminal. Various other results can be found in the `${VTRRESULT}` directory.
-
-## Plotting Submaps
-
-`external/vtr3_python` contains a script `plot_submaps.py` which can be used to plot the lidar or radar submaps from Teach pass. 
 
 ## [License](./LICENSE)

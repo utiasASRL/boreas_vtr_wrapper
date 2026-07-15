@@ -1,22 +1,29 @@
-# Set up VTR directory pointers
-export VTRROOT=$ROOTDIR                     # This is required for some internal scripts
+ROOTDIR=${ROOTDIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}
+cd "$ROOTDIR"
+
+export VTRROOT=$ROOTDIR
 export VTRRROOT=$ROOTDIR
 export VTRSRC=$ROOTDIR/external/vtr3
-export VTRRESULT=$ROOTDIR/results           # POINT THIS TO WHERE YOU WANT TO STORE RESULTS
-export VTRRDATA=/boreas_data               # POINT THIS TO DATA DIRECTORY
+export VTRRDATA=${VTRRDATA:-/boreas_data}
+export BOREAS_OUTPUT_ROOT=${BOREAS_OUTPUT_ROOT:-$VTRRDATA}
+export VTRRESULT=${VTRRESULT:-$BOREAS_OUTPUT_ROOT}
 export VTRRRESULT=$VTRRESULT/radar/boreas
 
-# Source setups
+export OPTIX_SDK_ROOT=${OPTIX_SDK_ROOT:-/optix_sdk}
+export OPTIX_EXTENSION_BUILD_DIR=${OPTIX_EXTENSION_BUILD_DIR:-$ROOTDIR/build/optix_range_tracer}
+export PYTHONPATH=$OPTIX_EXTENSION_BUILD_DIR/python${PYTHONPATH:+:$PYTHONPATH}
+
 source /opt/ros/humble/setup.bash
-source $VTRSRC/main/install/setup.bash # source the vtr3 environment
-source $VTRRROOT/src/install/setup.bash
+[[ -f $VTRSRC/main/install/setup.bash ]] && source "$VTRSRC/main/install/setup.bash"
+[[ -f $VTRRROOT/src/install/setup.bash ]] && source "$VTRRROOT/src/install/setup.bash"
 
-# Create directories if they don't exist
-mkdir -p $VTRRESULT
-mkdir -p $VTRRDATA
+mkdir -p "$VTRRESULT" "$BOREAS_OUTPUT_ROOT"
 
-# Activate venv
-source $ROOTDIR/venv/bin/activate
+if [[ -f $ROOTDIR/venv/bin/activate ]]; then
+    source "$ROOTDIR/venv/bin/activate"
+else
+    echo "Python environment not found; run scripts/create_venv.sh."
+fi
 
-# export OMP_NUM_THREADS=6   # used to control the number of threads the container can use
-# export NEPTUNE_API_TOKEN=temp # Input your Neptune API here
+# export OMP_NUM_THREADS=6
+# export NEPTUNE_API_TOKEN=temp
