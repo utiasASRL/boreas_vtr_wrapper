@@ -42,10 +42,11 @@ pip install \
   pyntcloud \
   plyfile
 
-# The RTX A4500 Laptop GPU has compute capability 8.6. NKSR builds a custom
-# C++/CUDA extension and therefore needs nvcc from the CUDA devel image.
+# NKSR builds a custom C++/CUDA extension and therefore needs nvcc from the
+# CUDA devel image. Build for the selected GPU unless explicitly overridden.
 export CUDA_HOME=/usr/local/cuda-11.8
-export TORCH_CUDA_ARCH_LIST="8.6"
+export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-$(python -c 'import torch; print(".".join(map(str, torch.cuda.get_device_capability())))')}"
+echo "Building NKSR for CUDA compute capability $TORCH_CUDA_ARCH_LIST"
 # NKSR compiles many large C++/CUDA translation units. Default to one compiler
 # process to avoid exhausting system memory. Override these variables manually
 # when more parallelism is safe.
