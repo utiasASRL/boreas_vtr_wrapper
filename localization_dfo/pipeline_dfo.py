@@ -631,7 +631,7 @@ def main():
     map_seq = dataset.get_seq_from_ID(args.map_sequence)
     loc_seq = dataset.get_seq_from_ID(args.loc_sequence)
     results_csv_path = (
-        vtr_results
+        Path(boreas_vtr_wrapper_dir)
         / "localization_dfo"
         / "results"
         / loc_seq.ID

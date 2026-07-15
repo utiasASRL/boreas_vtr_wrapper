@@ -36,7 +36,7 @@ else
         -e "ROOTDIR=$ROOTDIR" \
         -e VTRRDATA=/boreas_data \
         -e BOREAS_OUTPUT_ROOT=/boreas_output \
-        -e VTRRESULT=/boreas_output \
+        -e "VTRRESULT=$ROOTDIR/results" \
         -e OPTIX_SDK_ROOT=/optix_sdk \
         -v /tmp/.X11-unix:/tmp/.X11-unix \
         -v "$ROOTDIR:$ROOTDIR:rw" \
