@@ -102,7 +102,9 @@ RUN pip3 install \
   websocket-client
 
 ##Install LibTorch
-RUN curl https://download.pytorch.org/libtorch/cu117/libtorch-cxx11-abi-shared-with-deps-2.0.0%2Bcu117.zip --output libtorch.zip
+RUN curl -4 -fL --retry 5 --retry-delay 2 --retry-all-errors \
+  https://download.pytorch.org/libtorch/cu117/libtorch-cxx11-abi-shared-with-deps-2.0.0%2Bcu117.zip \
+  --output libtorch.zip
 RUN unzip libtorch.zip -d /opt/torch
 RUN rm libtorch.zip
 ENV TORCH_LIB=/opt/torch/libtorch
