@@ -42,6 +42,7 @@ else
         -v "$ROOTDIR:$ROOTDIR:rw" \
         -v "$BOREAS_DATA_HOST:/boreas_data:ro" \
         -v "$BOREAS_OUTPUT_HOST:/boreas_output:rw" \
+        -v "$BOREAS_OUTPUT_HOST:$BOREAS_OUTPUT_HOST:rw" \
         -v "$OPTIX_SDK_HOST:/optix_sdk:ro" \
         -w "$ROOTDIR" "boreas_wrapper_$(whoami)"
 fi
