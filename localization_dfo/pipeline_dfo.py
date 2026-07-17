@@ -562,7 +562,7 @@ def run_sequence(
 
         radar_frame.unload_data()
         print("radar frame unloaded!")
-        radar_frame_idx += 3
+        radar_frame_idx += 100
 
 
 def main():

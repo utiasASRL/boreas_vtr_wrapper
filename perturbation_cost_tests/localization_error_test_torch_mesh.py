@@ -18,7 +18,12 @@ from localization.pipeline import (
     build_patch_config,
     cen_filter_2d,
     correct_offsets,
-    get_submap_vertices,
+)
+from localization_dfo.io_utils import get_path_vertices_with_submaps
+from localization_dfo.pipeline_dfo import (
+    build_path_candidates,
+    build_T_radar_robot,
+    nearest_submap_idx,
 )
 from localization_fast.gauss_newton_localization_fast import (
     GeometryParams,
@@ -41,12 +46,12 @@ def make_perturbations():
     # )
 
     translation_offsets = {
-        "x": np.linspace(-0.3, 0.3, 601),
-        "y": np.linspace(-0.3, 0.3, 601),
-        "z": np.linspace(-0.3, 0.3, 601),
-        # "x": np.linspace(-0.2, 0.2, 41),
-        # "y": np.linspace(-0.2, 0.2, 41),
-        # "z": np.linspace(-0.2, 0.2, 41),
+        # "x": np.linspace(-0.3, 0.3, 601),
+        # "y": np.linspace(-0.3, 0.3, 601),
+        # "z": np.linspace(-0.3, 0.3, 601),
+        "x": np.linspace(-0.2, 0.2, 41),
+        "y": np.linspace(-0.2, 0.2, 41),
+        "z": np.linspace(-0.2, 0.2, 41),
         # "x": [0.0],
         # "y": [0.0],
         # "z": [0.0],
@@ -56,12 +61,12 @@ def make_perturbations():
         # "roll": [0.0],
         # "pitch": [0.0],
         # "yaw": [0.0],
-        "roll": np.linspace(-2.0, 2.0, 401),
-        "pitch": np.linspace(-2.0, 2.0, 401),
-        "yaw": np.linspace(-2.0, 2.0, 401),
-        # "roll": np.linspace(-2.0, 2.0, 41),
-        # "pitch": np.linspace(-2.0, 2.0, 41),
-        # "yaw": np.linspace(-2.0, 2.0, 41),
+        # "roll": np.linspace(-2.0, 2.0, 401),
+        # "pitch": np.linspace(-2.0, 2.0, 401),
+        # "yaw": np.linspace(-2.0, 2.0, 401),
+        "roll": np.linspace(-2.0, 2.0, 41),
+        "pitch": np.linspace(-2.0, 2.0, 41),
+        "yaw": np.linspace(-2.0, 2.0, 41),
     }
 
     return generate_delta_transforms(
@@ -352,7 +357,8 @@ def save_debug_images_if_better(
 
 
 def run_sequence(
-    seq,
+    map_seq,
+    loc_seq,
     lidar_results_dir,
     radar_start_frame,
     radar_end_frame,
@@ -368,62 +374,42 @@ def run_sequence(
     loss="mse",
     cauchy_c=0.1
 ):
-    print(f"SequenceID: {seq.ID}")
-    print(f"Number Radar Frames: {len(seq.radar_frames)}")
+    print(f"Map SequenceID: {map_seq.ID}")
+    print(f"Localization SequenceID: {loc_seq.ID}")
+    print(f"Number Radar Frames: {len(loc_seq.radar_frames)}")
 
     end_frame = radar_end_frame
     if end_frame is None:
-        end_frame = len(seq.radar_frames) - 2
+        end_frame = len(loc_seq.radar_frames) - 2
     else:
-        end_frame = min(end_frame, len(seq.radar_frames) - 2)
+        end_frame = min(end_frame, len(loc_seq.radar_frames) - 2)
 
     radar_start_frame = max(radar_start_frame, 1)
 
-    graph_dir = os.path.join(lidar_results_dir, seq.ID, seq.ID, "graph")
-    _, submap_vertices = get_submap_vertices(graph_dir=graph_dir)
-    T_lidar_robot = build_lidar_to_robot_transform(seq)
+    graph_dir = os.path.join(lidar_results_dir, map_seq.ID, map_seq.ID, "graph")
+    _, path_submap_pairs = get_path_vertices_with_submaps(graph_dir=graph_dir)
+    T_lidar_robot = build_lidar_to_robot_transform(map_seq)
+    submap_candidates = build_path_candidates(map_seq, path_submap_pairs, T_lidar_robot)
+    T_robot_radar = np.linalg.inv(build_T_radar_robot(loc_seq, build_lidar_to_robot_transform(loc_seq)))
     perturbations = make_perturbations()
 
-    lidar_frame_idx = 0
-    submap_vertices_idx = 0
     radar_frame_idx = radar_start_frame
     loaded_mesh_submap_stamp_us = None
     mesh_vertices_gpu = None
     mesh_triangles_gpu = None
     geom = build_geometry_params(patch_config)
 
-    while (
-        submap_vertices_idx < len(submap_vertices) - 1
-        and lidar_frame_idx < len(seq.lidar_frames)
-        and radar_frame_idx < end_frame + 1
-    ):
-        curr_submap = submap_vertices[submap_vertices_idx]
-        next_submap = submap_vertices[submap_vertices_idx + 1]
-        radar_frame = seq.radar_frames[radar_frame_idx]
-        lidar_frame = seq.lidar_frames[lidar_frame_idx]
-
-        if int(radar_frame.frame) < curr_submap.stamp // 1000:
-            radar_frame_idx += 1
-            continue
-
-        if next_submap.stamp // 1000 < int(radar_frame.frame):
-            submap_vertices_idx += 1
-            continue
-
-        if int(lidar_frame.frame) != curr_submap.stamp // 1000:
-            lidar_frame_idx += 1
-            continue
-
+    while radar_frame_idx < end_frame + 1:
         t0 = perf_counter()
-        radar_frame = seq.get_radar(radar_frame_idx)
+        radar_frame = loc_seq.get_radar(radar_frame_idx)
 
         poses = [
             get_inverse_tf(rad_frame.pose)
-            for rad_frame in seq.radar_frames[radar_frame_idx - 1:radar_frame_idx + 2]
+            for rad_frame in loc_seq.radar_frames[radar_frame_idx - 1:radar_frame_idx + 2]
         ]
         times = [
             rad_frame.timestamp_micro
-            for rad_frame in seq.radar_frames[radar_frame_idx - 1:radar_frame_idx + 2]
+            for rad_frame in loc_seq.radar_frames[radar_frame_idx - 1:radar_frame_idx + 2]
         ]
         query_times = radar_frame.timestamps.flatten().tolist()
         azimuth_poses = interpolate_poses(poses, times, query_times)
@@ -432,13 +418,17 @@ def run_sequence(
         T_enu_radar = radar_frame.pose
         T_gt = np.linalg.inv(T_enu_radar)
         odom_transforms = np.array([T_enu_radar @ T_i for T_i in azimuth_poses])
+        T_robot_enu = T_robot_radar @ T_gt
+        curr_submap, lidar_frame, _ = submap_candidates[
+            nearest_submap_idx(T_robot_enu, submap_candidates)
+        ]
 
         submap_stamp_us = curr_submap.stamp // 1000
         if loaded_mesh_submap_stamp_us != submap_stamp_us:
             del mesh_vertices_gpu, mesh_triangles_gpu
             mesh_vertices_gpu, mesh_triangles_gpu, _ = load_submap_mesh_to_enu(
                 mesh_root=mesh_root,
-                sequence_id=seq.ID,
+                sequence_id=map_seq.ID,
                 submap=curr_submap,
                 T_lidar_robot=T_lidar_robot,
                 lidar_pose=lidar_frame.pose,
@@ -446,7 +436,7 @@ def run_sequence(
             )
             loaded_mesh_submap_stamp_us = submap_stamp_us
 
-        shifted_polar = correct_offsets(radar_frame, radar_frame_idx, seq)
+        shifted_polar = correct_offsets(radar_frame, radar_frame_idx, loc_seq)
         filtered_polar = cen_filter_2d(
             shifted_polar,
             sigma_gauss=15.0,
@@ -558,8 +548,9 @@ def main():
         description="Plot perturbation costs using cached NKSR meshes and the fast mesh forward chain."
     )
     parser.add_argument("--radar-start-frame", type=int, default=65)
-    parser.add_argument("--radar-end-frame", type=int, default=665)
-    parser.add_argument("--sequence-id", default="boreas-2024-12-03-12-54")
+    parser.add_argument("--radar-end-frame", type=int, default=None)
+    parser.add_argument("--map-sequence", required=True)
+    parser.add_argument("--loc-sequence", required=True)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--geometry-batch-size", type=int, default=400)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -621,27 +612,27 @@ def main():
     )
     patch_config["fov_deg"] = fov_deg
 
-    for seq in bd.sequences:
-        if args.sequence_id is not None and seq.ID != args.sequence_id:
-            print(f"Skipping {seq.ID}")
-            continue
-        run_sequence(
-            seq=seq,
-            lidar_results_dir=lidar_results_dir,
-            radar_start_frame=args.radar_start_frame,
-            radar_end_frame=args.radar_end_frame,
-            patch_config=patch_config,
-            model=model,
-            device=device,
-            mesh_root=mesh_root,
-            output_dir=output_dir,
-            batch_size=args.batch_size,
-            geometry_batch_size=args.geometry_batch_size,
-            use_covisibility=args.covisibility,
-            use_gaussian_blur=args.gaussian_blur,
-            loss=args.loss,
-            cauchy_c=args.cauchy_c
-        )
+    map_seq = bd.get_seq_from_ID(args.map_sequence)
+    loc_seq = bd.get_seq_from_ID(args.loc_sequence)
+    output_dir = output_dir / loc_seq.ID
+    run_sequence(
+        map_seq=map_seq,
+        loc_seq=loc_seq,
+        lidar_results_dir=lidar_results_dir,
+        radar_start_frame=args.radar_start_frame,
+        radar_end_frame=args.radar_end_frame,
+        patch_config=patch_config,
+        model=model,
+        device=device,
+        mesh_root=mesh_root,
+        output_dir=output_dir,
+        batch_size=args.batch_size,
+        geometry_batch_size=args.geometry_batch_size,
+        use_covisibility=args.covisibility,
+        use_gaussian_blur=args.gaussian_blur,
+        loss=args.loss,
+        cauchy_c=args.cauchy_c
+    )
 
 
 if __name__ == "__main__":
