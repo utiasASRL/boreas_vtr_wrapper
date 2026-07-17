@@ -13,13 +13,13 @@ from pyboreas.utils.odometry import interpolate_poses
 from pyboreas.utils.utils import get_inverse_tf
 from scipy.ndimage import gaussian_filter1d, maximum_filter1d
 
-from localization.pipeline import (
-    build_lidar_to_robot_transform,
+from localization_dfo.io_utils import (
+    build_T_lidar_robot as build_lidar_to_robot_transform,
     build_patch_config,
     cen_filter_2d,
     correct_offsets,
+    get_path_vertices_with_submaps,
 )
-from localization_dfo.io_utils import get_path_vertices_with_submaps
 from localization_dfo.pipeline_dfo import (
     build_path_candidates,
     build_T_radar_robot,
