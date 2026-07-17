@@ -555,7 +555,10 @@ def main():
     else:
         output_dir = Path("perturbation_cost_tests") / f"{args.output_dir}"
 
-    bd = BoreasDataset(boreas_data)
+    bd = BoreasDataset(
+        boreas_data,
+        [[sequence_id] for sequence_id in dict.fromkeys((args.map_sequence, args.loc_sequence))],
+    )
     model = load_radar_translator_model(weights_path, device)
 
     fov_deg = 6.0

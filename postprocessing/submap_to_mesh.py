@@ -1,3 +1,4 @@
+import argparse
 import os
 from pathlib import Path
 import time
@@ -424,7 +425,10 @@ if not boreas_data:
     raise RuntimeError("VTRRDATA is not set.")
 
 lidar_results_dir = os.path.join(boreas_vtr_wrapper_dir, "results/lidar")
-bd = BoreasDataset(boreas_data)
+parser = argparse.ArgumentParser(description="Generate submap meshes for a Boreas sequence.")
+parser.add_argument("--sequence-id", required=True)
+args = parser.parse_args()
+bd = BoreasDataset(boreas_data, [[args.sequence_id]])
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"NKSR device: {device}")
@@ -485,8 +489,6 @@ reconstruction_parameters = {
 
 for seq in bd.sequences:
     print(f"SequenceID: {seq.ID}")
-    if seq.ID != "boreas-2024-12-03-12-54":
-        continue
 
     graph_dir = os.path.join(lidar_results_dir, seq.ID, seq.ID, "graph")
     test_graph, submap_vertices = get_submap_vertices(graph_dir=graph_dir)

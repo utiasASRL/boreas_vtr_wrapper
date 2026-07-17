@@ -441,7 +441,10 @@ def main():
         vtr_results or os.path.join(boreas_vtr_wrapper_dir, "results"),
         "lidar",
     )
-    dataset = BoreasDataset(boreas_data)
+    dataset = BoreasDataset(
+        boreas_data,
+        [[args.sequence_id]] if args.sequence_id is not None else None,
+    )
     patch_config = build_patch_config(
         fov_deg=args.fov_deg,
         res_deg=args.res_deg,

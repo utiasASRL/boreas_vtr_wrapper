@@ -617,7 +617,10 @@ def main():
         "model_dev/model_weights/6_deg_attentional_skip_bigger/best.pth",
     )
     model = load_radar_translator_model(weights_path, device)
-    dataset = BoreasDataset(boreas_data)
+    dataset = BoreasDataset(
+        boreas_data,
+        [[sequence_id] for sequence_id in dict.fromkeys((args.map_sequence, args.loc_sequence))],
+    )
 
     patch_config = build_patch_config(
         fov_deg=6.0,
