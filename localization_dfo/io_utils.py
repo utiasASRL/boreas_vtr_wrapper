@@ -110,7 +110,8 @@ def correct_offsets(radar_frame, radar_frame_idx, seq):
     vx = -azimuth_body_rates[:, 0]
     vy = -azimuth_body_rates[:, 1]
     u = vx * np.cos(radar_frame.azimuths) + vy * np.sin(radar_frame.azimuths)
-    delta_r_d = seq.calib.radar_doppler_beta * u
+    # delta_r_d = seq.calib.radar_doppler_beta * u
+    delta_r_d = 0.05024 * u
     chirp_sign = np.where(radar_frame.chirp_type == 0, -1, radar_frame.chirp_type)
     doppler_shift = chirp_sign * delta_r_d / radar_frame.resolution
 
