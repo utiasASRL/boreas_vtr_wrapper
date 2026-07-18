@@ -1,9 +1,9 @@
 import os
 
 import matplotlib.pyplot as plt
-import nksr
 import numpy as np
-import open3d as o3d
+import open3d as o3d  # Load before nksr to avoid duplicate pybind registration.
+import nksr
 import torch
 from pyboreas import BoreasDataset
 from pylgmath import Transformation
