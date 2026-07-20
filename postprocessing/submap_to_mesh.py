@@ -427,6 +427,7 @@ if not boreas_data:
 lidar_results_dir = os.path.join(boreas_vtr_wrapper_dir, "results/lidar")
 parser = argparse.ArgumentParser(description="Generate submap meshes for a Boreas sequence.")
 parser.add_argument("--sequence-id", required=True)
+parser.add_argument("--start-submap-vertex-id", default=None)
 args = parser.parse_args()
 bd = BoreasDataset(boreas_data, [[args.sequence_id]])
 
@@ -493,6 +494,19 @@ for seq in bd.sequences:
     graph_dir = os.path.join(lidar_results_dir, seq.ID, seq.ID, "graph")
     test_graph, submap_vertices = get_submap_vertices(graph_dir=graph_dir)
     T_lidar_robot = build_lidar_to_robot_transform(seq)
+
+    if args.start_submap_vertex_id is not None:
+        try:
+            start_idx = next(
+                idx
+                for idx, submap in enumerate(submap_vertices)
+                if str(submap.id) == args.start_submap_vertex_id
+            )
+        except StopIteration:
+            raise ValueError(
+                f"Submap vertex ID not found: {args.start_submap_vertex_id}"
+            ) from None
+        submap_vertices = submap_vertices[start_idx:]
 
     sequence_output_dir = output_root / seq.ID
     sequence_output_dir.mkdir(parents=True, exist_ok=True)
