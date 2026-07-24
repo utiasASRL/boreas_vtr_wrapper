@@ -257,7 +257,7 @@ def save_patches_and_labels(save_dir, patches, polar, depth_image, radar_frame, 
     # Loop through all patches
     for i, patch in enumerate(patches):
         patch_name = f"{radar_frame}_patch_{i}"
-        np.save(array_save_dir / f"{patch_name}.npy", patch)
+        # np.save(array_save_dir / f"{patch_name}.npy", patch)
 
         # Save RGB colour depth map
         vis_img_8bit = np.zeros_like(patch, dtype=np.uint8)
@@ -272,14 +272,14 @@ def save_patches_and_labels(save_dir, patches, polar, depth_image, radar_frame, 
         # Set the empty background pixels back to pure black
         color_depth[vis_img_8bit == 0] = [0, 0, 0]
 
-        cv2.imwrite(str(img_save_dir / f"{patch_name}.png"), color_depth)
+        # cv2.imwrite(str(img_save_dir / f"{patch_name}.png"), color_depth)
         
         # Since radar is upside down, also save flipped image
         color_depth_flipped = cv2.flip(color_depth, 0)
         cv2.imwrite(str(flipped_img_save_dir / f"{patch_name}.png"), color_depth_flipped)
 
         # Save Labels + Waveform images
-        np.save(labels_save_dir / f"{patch_name}.npy", polar[i])
+        # np.save(labels_save_dir / f"{patch_name}.npy", polar[i])
 
 ######################
 # Point Cloud Plotting
@@ -294,8 +294,9 @@ def toggle(vis):
 
 vis = o3d.visualization.VisualizerWithKeyCallback()
 vis.register_key_callback(ord(' '), toggle)
+# vis.create_window(width=770, height=770)
 vis.create_window()
-origin = np.array([0, 0, 2.42])
+origin = np.array([0, 0, 0])
 # origin = np.array([0, 0, 0])
 frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=5.0, origin=origin)
 vis.add_geometry(frame)
@@ -318,8 +319,8 @@ class DepthImage:
         elevation_upper_deg=15.0, 
         azimuth_lower_deg=-180.0, 
         azimuth_upper_deg=180.0, 
-        hfov_deg=5.0,
-        vfov_deg=5.0,
+        hfov_deg=20.0,
+        vfov_deg=20.0,
         max_range=200.0,
         min_range=1.0
     ):
@@ -370,14 +371,18 @@ lidar_results_dir = os.path.join(boreas_vtr_wrapper_dir, "results/lidar")
 boreas_data = os.getenv("VTRRDATA") # TODO change to use environment variable
 bd = BoreasDataset(boreas_data)
 
-radar_start_frame = 65
-radar_end_frame = 1000
+radar_start_frame = 272 # 412
+radar_end_frame = None
 radar_start_ts = None
 radar_end_ts = None
 
 # Loop through each frame in order (odometry)
 for seq in bd.sequences:
     print(f"SequenceID: {seq.ID}")
+    if seq.ID != "boreas-2024-12-03-12-54":
+        continue
+    if radar_end_frame is None:
+        radar_end_frame = len(seq.radar_frames) - 1
 
     # get radar start and end times
     radar_start_ts = seq.radar_frames[radar_start_frame].frame
@@ -427,16 +432,40 @@ for seq in bd.sequences:
         # Get submap in lidar frame
         map_pts = extract_points_from_vertex(curr_submap, msg="pointmap")
         print("-" * 10)
-        print(f"map pts shape: {map_pts.shape}")
+        # print(f"map pts shape: {map_pts.shape}")
         print(radar_frame.frame)
-        # print(f"intensities shape: {intensities.shape}, Max: {np.max(intensities)}, Min: {np.min(intensities)}")
-        print("-" * 10)
+        print("Index:", radar_frame_idx)
+        # # print(f"intensities shape: {intensities.shape}, Max: {np.max(intensities)}, Min: {np.min(intensities)}")
+        # print("-" * 10)
         map_pts = convert_points_to_frame(map_pts, T_lidar_robot)
+
+        # Roll/Pitch offset
+        deg = np.pi / 180
+        a = 0.0 * deg
+
+        R_roll = np.array([
+            [1,          0,          0],
+            [0,  np.cos(a), -np.sin(a)],
+            [0,  np.sin(a),  np.cos(a)]
+        ])
+
+        R_pitch = np.array([
+            [ np.cos(a), 0, np.sin(a)],
+            [         0, 1,         0],
+            [-np.sin(a), 0, np.cos(a)]
+        ])
+
+        T_roll = np.eye(4)
+        T_roll[:3, :3] = R_roll
+
+        T_pitch = np.eye(4)
+        T_pitch[:3, :3] = R_pitch
 
         # Get submap in current radar frame (lidar --> ENU --> radar)
         T_enu_lidar = Transformation(T_ba=lidar_frame.pose)
-        T_enu_radar = Transformation(T_ba=radar_frame.pose)
+        T_enu_radar = Transformation(T_ba=radar_frame.pose @ T_pitch)
         map_pts = convert_points_to_frame(map_pts, T_enu_radar.inverse() * T_enu_lidar)
+        print(map_pts.shape)
 
         # Filter only the points at a given elevation range
         x_points = map_pts[0, :]
@@ -448,13 +477,13 @@ for seq in bd.sequences:
         elevation = np.arcsin(z_points / r_vals)
 
         valid_mask = (
-            (np.abs(elevation) <= np.deg2rad(1))
+            (np.abs(elevation) <= np.deg2rad(45))
             # (z_points < 1.42)
             # (np.abs(azimuth - np.deg2rad(-110.63574)) <= np.deg2rad(1))
         )
 
         map_pts = map_pts[:, valid_mask]
-        # intensities = intensities[valid_mask]
+        # # intensities = intensities[valid_mask]
         
         # plot point cloud
         pcd.points = o3d.utility.Vector3dVector(map_pts.T)
@@ -465,7 +494,7 @@ for seq in bd.sequences:
         # avoid divide-by-zero if all points have same height
         if z_max > z_min:
             z_norm = (z_points - z_min) / (z_max - z_min)
-            z_norm = np.power(z_norm, 2.0)
+            z_norm = np.power(z_norm, 3.0)
         else:
             z_norm = np.zeros_like(z_points)
 
@@ -475,8 +504,8 @@ for seq in bd.sequences:
         pcd.colors = o3d.utility.Vector3dVector(colors)
 
         # Save depth images
-        depth_image = DepthImage()
-        get_depth_image(seq.seq_root + "/input", map_pts, depth_image, radar_frame.frame, save=False)
+        # depth_image = DepthImage()
+        # get_depth_image(seq.seq_root + "/input", map_pts, depth_image, radar_frame.frame, save=False)
 
         # # Extract depth image patches using radar azimuths
         # radar_frame = seq.get_radar(radar_frame_idx)
@@ -489,7 +518,7 @@ for seq in bd.sequences:
         # # filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)
         
         # # Save patches and labels
-        # save_patches_and_labels(seq.seq_root, patches, shifted_polar, depth_image, radar_frame.frame, save_batch=True)
+        # save_patches_and_labels(seq.seq_root, patches, shifted_polar, depth_image, radar_frame.frame, save_batch=False)
         radar_frame.unload_data()
 
         # For video playing in Open3D
@@ -503,7 +532,7 @@ for seq in bd.sequences:
             # # Point the X-axis UP
             # view_ctl.set_up([1, 0, 0])     
 
-            # view_ctl.set_front([-3, 0, -1]) 
+            # view_ctl.set_front([-2, 0, -1]) 
 
             # Keep the Z-axis (or whichever is your vertical) pointing UP
             view_ctl.set_up([1, 0, 0])
@@ -523,20 +552,22 @@ for seq in bd.sequences:
             # Center on the origin
             # view_ctl.set_lookat(origin)
         
+        t = time.time()
+        while time.time() - t < 0.1 or paused:
+            vis.poll_events()
+            vis.update_renderer()
+
         # --- INSERT CAPTURE CODE HERE ---
         # 1. Force the GPU to draw the new geometry and camera angle
         # vis.poll_events()
         # vis.update_renderer()
 
         # # 2. Save the image
-        # image_name = f"angled_lidar_images/{radar_frame.frame}.png"
+        # image_name = f"bev_lidar_images/{radar_frame.frame}.png"
         # vis.capture_screen_image(image_name, do_render=True)
         # --------------------------------
         
-        t = time.time()
-        while time.time() - t < 0.1 or paused:
-            vis.poll_events()
-            vis.update_renderer()
+        
 
         radar_frame_idx += 1
 

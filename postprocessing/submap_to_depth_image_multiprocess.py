@@ -337,8 +337,8 @@ lidar_results_dir = os.path.join(boreas_vtr_wrapper_dir, "results/lidar")
 boreas_data = os.getenv("VTRRDATA") # TODO change to use environment variable
 bd = BoreasDataset(boreas_data)
 
-radar_start_frame = 65 # 65
-radar_end_frame = 200 # 200
+radar_start_frame = 200 # 65
+radar_end_frame = None # 200
 radar_start_ts = None
 radar_end_ts = None
 
@@ -353,6 +353,8 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor
     for seq in bd.sequences:
         print(f"SequenceID: {seq.ID}")
         print(f"Number of Radar Frames: {len(seq.radar_frames)}")
+        if radar_end_frame is None:
+            radar_end_frame = len(seq.radar_frames) - 1
 
         # get radar start and end times
         radar_start_ts = seq.radar_frames[radar_start_frame].frame
@@ -503,8 +505,8 @@ with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor
             t3 = time.perf_counter()
 
             save_patches(seq_dir=seq.seq_root, patches=patches, fov=fov_deg, radar_frame=radar_frame.frame)
-            # save_labels(seq_dir=seq.seq_root, folder_name="labels", polar=shifted_polar, radar_frame=radar_frame.frame)
-            # save_labels(seq_dir=seq.seq_root, folder_name="filtered_labels", polar=filtered_polar, radar_frame=radar_frame.frame)
+            save_labels(seq_dir=seq.seq_root, folder_name="labels", polar=shifted_polar, radar_frame=radar_frame.frame)
+            save_labels(seq_dir=seq.seq_root, folder_name="filtered_labels", polar=filtered_polar, radar_frame=radar_frame.frame)
 
 
             t4 = time.perf_counter()

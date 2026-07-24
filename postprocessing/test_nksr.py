@@ -76,6 +76,108 @@ def estimate_point_spacing(points):
     return float(np.median(nearest))
 
 
+def evaluate_point_to_mesh_distances(
+    points,
+    mesh,
+    spacing,
+    chunk_size=100_000,
+    plot_histogram=True,
+):
+    """Report unsigned distances from measured points to the triangle surface.
+
+    Distances for unreferenced points are the useful measure of whether points
+    omitted from the mesh connectivity are nevertheless represented by the
+    reconstructed surface. Referenced points should have approximately zero
+    distance because they are mesh vertices.
+    """
+    points = np.asarray(points, dtype=np.float32)
+    triangles = np.asarray(mesh.triangles)
+    if len(points) == 0 or len(triangles) == 0:
+        raise ValueError("Point-to-mesh evaluation requires points and triangles.")
+
+    referenced_indices = np.unique(triangles)
+    referenced_mask = np.zeros(len(points), dtype=bool)
+    referenced_mask[referenced_indices] = True
+
+    tensor_mesh = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
+    scene = o3d.t.geometry.RaycastingScene()
+    scene.add_triangles(tensor_mesh)
+
+    distances = np.empty(len(points), dtype=np.float32)
+    for start in range(0, len(points), chunk_size):
+        end = min(start + chunk_size, len(points))
+        query_points = o3d.core.Tensor(
+            points[start:end],
+            dtype=o3d.core.Dtype.Float32,
+        )
+        distances[start:end] = scene.compute_distance(query_points).numpy()
+
+    def print_distribution(label, values):
+        if len(values) == 0:
+            print(f"{label}: no points")
+            return
+
+        percentiles = np.percentile(values, [50, 75, 90, 95, 99])
+        rms = np.sqrt(np.mean(np.square(values, dtype=np.float64)))
+        print(
+            f"{label}: n={len(values)}, mean={np.mean(values):.4f} m, "
+            f"RMS={rms:.4f} m, max={np.max(values):.4f} m"
+        )
+        print(
+            "  percentiles [p50, p75, p90, p95, p99] m: "
+            + ", ".join(f"{value:.4f}" for value in percentiles)
+        )
+        print(
+            "  within point-spacing multiples: "
+            + ", ".join(
+                f"{multiple:g}x={100.0 * np.mean(values <= multiple * spacing):.1f}%"
+                for multiple in (1.0, 2.0, 5.0, 10.0)
+            )
+        )
+
+    unreferenced_distances = distances[~referenced_mask]
+    print("Point-to-mesh distance evaluation:")
+    print(
+        f"  Referenced mesh vertices: {len(referenced_indices)} / {len(points)} "
+        f"({100.0 * np.mean(referenced_mask):.1f}%)"
+    )
+    print_distribution("  All measured points", distances)
+    print_distribution("  Unreferenced measured points", unreferenced_distances)
+
+    if plot_histogram and len(unreferenced_distances) > 0:
+        # Limit the displayed range to p99 so a few extreme outliers do not
+        # compress the informative part of the distribution.
+        histogram_max = max(
+            float(np.percentile(unreferenced_distances, 99)),
+            spacing,
+        )
+        plt.figure("Unreferenced point-to-mesh distances")
+        plt.hist(
+            unreferenced_distances,
+            bins=100,
+            range=(0.0, histogram_max),
+        )
+        for multiple in (1.0, 2.0, 5.0):
+            threshold = multiple * spacing
+            if threshold <= histogram_max:
+                plt.axvline(
+                    threshold,
+                    linestyle="--",
+                    label=f"{multiple:g}x spacing",
+                )
+        plt.xlabel("Unsigned point-to-mesh distance (m)")
+        plt.ylabel("Unreferenced point count")
+        plt.title(
+            "Unreferenced measured points "
+            f"(display clipped at p99={histogram_max:.3f} m)"
+        )
+        plt.legend()
+        plt.tight_layout()
+        plt.show(block=False)
+
+    return distances, referenced_mask
+
+
 def snap_nksr_mesh_to_original_points(
     original_points,
     nksr_vertices,
@@ -281,7 +383,7 @@ def reconstruct_nksr_with_original_vertices(
         f"{len(nksr_faces)} triangles"
     )
 
-    return snap_nksr_mesh_to_original_points(
+    mesh = snap_nksr_mesh_to_original_points(
         original_points=original_points,
         nksr_vertices=nksr_vertices,
         nksr_faces=nksr_faces,
@@ -291,6 +393,7 @@ def reconstruct_nksr_with_original_vertices(
         max_centroid_support_multiplier=max_centroid_support_multiplier,
         min_normal_alignment=min_normal_alignment,
     )
+    return mesh, spacing
 
 
 ######################
@@ -311,9 +414,10 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"NKSR device: {device}")
 reconstructor = nksr.Reconstructor(device)
 
-radar_start_frame = 158 # 100
+radar_start_frame = 100 # 272 # 158 # 100
 radar_end_frame = None
 visualize_once = True
+plot_point_to_mesh_distance_histogram = True
 
 # Connectivity-transfer tuning. All distance thresholds are multiples of the
 # median nearest-neighbor spacing in the filtered measured point cloud.
@@ -321,10 +425,10 @@ visualize_once = True
 # max_edge_length_multiplier = 12.0
 # max_centroid_support_multiplier = 5.0
 # min_normal_alignment = 0.25
-max_snap_distance_multiplier = 10.0
-max_edge_length_multiplier = 20.0
-max_centroid_support_multiplier = 7.0
-min_normal_alignment = 0.1
+max_snap_distance_multiplier = 5.0
+max_edge_length_multiplier = 5.0
+max_centroid_support_multiplier = 20.0
+min_normal_alignment = 0.0
 
 
 ################
@@ -370,6 +474,10 @@ for seq in bd.sequences:
         radar_frame = seq.radar_frames[radar_frame_idx]
         lidar_frame = seq.lidar_frames[lidar_frame_idx]
 
+        if radar_frame.frame != "1733248522278411":
+            radar_frame_idx += 1
+            continue
+
         if int(radar_frame.frame) < curr_submap.stamp // 1000:
             radar_frame_idx += 1
             continue
@@ -401,23 +509,31 @@ for seq in bd.sequences:
 
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(map_pts.T)
-        pcd, _ = pcd.remove_radius_outlier(
-            nb_points=3,
-            radius=0.50,
-        )
+        # pcd, _ = pcd.remove_radius_outlier(
+        #     nb_points=3,
+        #     radius=0.50,
+        # )
+        # pcd = pcd.voxel_down_sample(voxel_size=0.2)
         radar_frame.unload_data()
 
-        mesh = reconstruct_nksr_with_original_vertices(
+        mesh, point_spacing = reconstruct_nksr_with_original_vertices(
             pcd=pcd,
             reconstructor=reconstructor,
             device=device,
-            detail_level=1.0,
+            detail_level=0.0,
             mise_iter=1,
             trim=True,
             max_snap_distance_multiplier=max_snap_distance_multiplier,
             max_edge_length_multiplier=max_edge_length_multiplier,
             max_centroid_support_multiplier=max_centroid_support_multiplier,
             min_normal_alignment=min_normal_alignment,
+        )
+
+        evaluate_point_to_mesh_distances(
+            points=np.asarray(pcd.points),
+            mesh=mesh,
+            spacing=point_spacing,
+            plot_histogram=plot_point_to_mesh_distance_histogram,
         )
 
         color_mesh_by_height(mesh, cmap_name="jet")

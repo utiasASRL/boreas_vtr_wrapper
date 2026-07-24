@@ -251,7 +251,7 @@ lidar_results_dir = os.path.join(boreas_vtr_wrapper_dir, "results/lidar")
 boreas_data = os.getenv("VTRRDATA") # TODO change to use environment variable
 bd = BoreasDataset(boreas_data)
 
-radar_start_frame = 65 # 65
+radar_start_frame = 245 # 65
 radar_end_frame = 1000 # 200
 radar_start_ts = None
 radar_end_ts = None
@@ -288,7 +288,7 @@ for seq in bd.sequences:
     lidar_frame_idx = 0
     submap_vertices_idx = 0
     radar_frame_idx = radar_start_frame
-    while (submap_vertices_idx < len(submap_vertices) - 1 and lidar_frame_idx < len(seq.lidar_frames) and radar_frame_idx < radar_end_frame + 1):
+    while (submap_vertices_idx < len(submap_vertices) - 1 and lidar_frame_idx < len(seq.lidar_frames) and radar_frame_idx < radar_end_frame + 1):        
         curr_submap = submap_vertices[submap_vertices_idx]
         next_submap = submap_vertices[submap_vertices_idx + 1]
         radar_frame = seq.radar_frames[radar_frame_idx]
@@ -332,7 +332,13 @@ for seq in bd.sequences:
         t0 = time.perf_counter()
         # naively get map points in each azimuth pose
         map_pts_all = [convert_points_to_frame(map_pts_enu, T_azi) for T_azi in azimuth_transform_poses]
-
+        
+        azimuth_poses = None
+        map_pts_robot = None
+        map_pts_lidar = None
+        map_pts_enu = None
+        azimuth_transform_poses = None
+        
         # convert to spherical
         pts = np.stack(map_pts_all, axis=0) # (400, 3, N)
         x = pts[:, 0, :]
@@ -350,72 +356,84 @@ for seq in bd.sequences:
         patch_pts_all = [pts[i, :, patch_mask[i]] for i in range(pts.shape[0])] # all patches as a list
         
         patch_r_all        = [r[i,   patch_mask[i]] for i in range(r.shape[0])]
-        patch_az_local_all = [daz[i, patch_mask[i]] for i in range(daz.shape[0])]
-        patch_el_all       = [el[i,  patch_mask[i]] for i in range(el.shape[0])]
+        # patch_az_local_all = [daz[i, patch_mask[i]] for i in range(daz.shape[0])]
+        # patch_el_all       = [el[i,  patch_mask[i]] for i in range(el.shape[0])]
+
+        pts = None
+        xy = None
+        r = None
+        az = None
+        el = None
+        patch_mask = None
+        patch_pts_all = None
 
         az_res_deg = 0.1
         el_res_deg = 0.1
 
         depth_patches = []
+        delta_T = np.eye(4)
+        # delta_T[0, 3] = -20.0
+
+        print(delta_T)
+        print(radar_frame.frame)
         
         for i in range(len(patch_r_all)):
-            depth_img = patch_angles_to_depth_image(
-                az_local=patch_az_local_all[i],
-                el_local=patch_el_all[i],
-                r=patch_r_all[i],
-                hfov=hfov,
-                vfov=vfov,
-                az_res_deg=az_res_deg,
-                el_res_deg=el_res_deg,
-                min_range=0.0,
-            )
-            depth_patches.append(depth_img)
+            # depth_img = patch_angles_to_depth_image(
+            #     az_local=patch_az_local_all[i],
+            #     el_local=patch_el_all[i],
+            #     r=patch_r_all[i],
+            #     hfov=hfov,
+            #     vfov=vfov,
+            #     az_res_deg=az_res_deg,
+            #     el_res_deg=el_res_deg,
+            #     min_range=0.0,
+            # )
+            # depth_patches.append(depth_img)
 
             ###################
             # Patch Point Cloud
             ###################
 
             # # map_pts = patch_pts_all[i]
-            # map_pts = map_pts_all[i]
-            # # Filter only the points at a given elevation range
-            # x_points = map_pts[0, :]
-            # y_points = map_pts[1, :] 
-            # z_points = map_pts[2, :]
+            map_pts = convert_points_to_frame(map_pts_all[i], Transformation(T_ba=delta_T))
+            # Filter only the points at a given elevation range
+            x_points = map_pts[0, :]
+            y_points = map_pts[1, :] 
+            z_points = map_pts[2, :]
 
-            # r_vals = np.sqrt(x_points**2 + y_points**2 + z_points**2)
-            # azimuth = np.arctan2(y_points, x_points)
-            # elevation = np.arcsin(z_points / r_vals)
+            r_vals = np.sqrt(x_points**2 + y_points**2 + z_points**2)
+            azimuth = np.arctan2(y_points, x_points)
+            elevation = np.arcsin(z_points / r_vals)
 
-            # valid_mask = (
-            #     (np.abs(elevation) <= np.deg2rad(30)) & 
-            #     (x_points > 0)
-            # )
+            valid_mask = (
+                (np.abs(elevation) <= np.deg2rad(90)) 
+                # (elevation <= np.deg2rad(10)) & (elevation >= np.deg2rad(-10))
+            )
 
-            # if map_pts.shape[0] == 0 or i % 100 != 0:
-            #     print(f"Skipping azimuth {i}")
-            #     continue
+            if map_pts.shape[0] == 0 or i % 100 != 0:
+                # print(f"Skipping azimuth {i}")
+                continue
 
-            # # plot point cloud patch
-            # map_pts = map_pts[:, valid_mask]
-            # print(np.min(r_vals[valid_mask]))
-            # print(r_vals[valid_mask])
-            # pcd.points = o3d.utility.Vector3dVector(map_pts.T)
+            # plot point cloud patch
+            map_pts = map_pts[:, valid_mask]
+            print(np.min(r_vals[valid_mask]))
+            print(r_vals[valid_mask])
+            pcd.points = o3d.utility.Vector3dVector(map_pts.T)
 
-            # z = map_pts[2, :]  # height
-            # z_min = np.min(z)
-            # z_max = np.max(z)
+            z = map_pts[2, :]  # height
+            z_min = np.min(z)
+            z_max = np.max(z)
 
-            # # avoid divide-by-zero if all points have same height
-            # if z_max > z_min:
-            #     z_norm = (z - z_min) / (z_max - z_min)
-            # else:
-            #     z_norm = np.zeros_like(z)
+            # avoid divide-by-zero if all points have same height
+            if z_max > z_min:
+                z_norm = (z - z_min) / (z_max - z_min)
+            else:
+                z_norm = np.zeros_like(z)
 
-            # # use matplotlib colormap
-            # cmap = plt.get_cmap("turbo")   # or "viridis", "jet"
-            # colors = cmap(z_norm)[:, :3]   # drop alpha channel
-            # pcd.colors = o3d.utility.Vector3dVector(colors)
-
+            # use matplotlib colormap
+            cmap = plt.get_cmap("turbo")   # or "viridis", "jet"
+            colors = cmap(z_norm)[:, :3]   # drop alpha channel
+            pcd.colors = o3d.utility.Vector3dVector(colors)
 
             ##################
             # Plot Depth Image
@@ -430,38 +448,38 @@ for seq in bd.sequences:
             # plt.show()
 
             # For video playing in Open3D
-            # if first:
-            #     first = False
-            #     paused = True
-            #     vis.add_geometry(pcd)
-            #     # Look along the Z-axis (into the page)
-            #     # view_ctl.set_front([0, 0, -1]) 
-            #     # # Point the X-axis UP
-            #     # view_ctl.set_up([1, 0, 0])   
+            if first:
+                first = False
+                paused = True
+                vis.add_geometry(pcd)
+                # Look along the Z-axis (into the page)
+                view_ctl.set_front([0, 0, -1]) 
+                # Point the X-axis UP
+                view_ctl.set_up([1, 0, 0])   
 
-            #     view_ctl.set_front([-1, 0, 0])
-            #     view_ctl.set_up([0, 0, -1])  
-            #     # Center on the origin
-            #     view_ctl.set_lookat(origin)
-            # else:
-            #     vis.update_geometry(pcd)
-            #     # Look along the Z-axis (into the page)
-            #     # view_ctl.set_front([0, 0, -1]) 
-            #     # # Point the X-axis UP
-            #     # view_ctl.set_up([1, 0, 0])   
+                # view_ctl.set_front([-1, 0, 0])
+                # view_ctl.set_up([0, 0, -1])  
+                # Center on the origin
+                view_ctl.set_lookat(origin)
+            else:
+                vis.update_geometry(pcd)
+                # Look along the Z-axis (into the page)
+                # view_ctl.set_front([0, 0, -1]) 
+                # # Point the X-axis UP
+                # view_ctl.set_up([1, 0, 0])   
 
-            #     view_ctl.set_front([-1, 0, -1])
-            #     view_ctl.set_up([0, 0, -1]) 
-            #     # Center on the origin
-            #     view_ctl.set_lookat(origin)
-            # t = time.time()
-            # while time.time() - t < 0.1 or paused:
-            #     vis.poll_events()
-            #     vis.update_renderer()
+                # view_ctl.set_front([-1, 0, -1])
+                # view_ctl.set_up([0, 0, -1]) 
+                # Center on the origin
+                view_ctl.set_lookat(origin)
+            t = time.time()
+            while time.time() - t < 0.1 or paused:
+                vis.poll_events()
+                vis.update_renderer()
 
 
-        patches = np.stack(depth_patches).astype(np.float32)
-        shifted_polar = correct_offsets(radar_frame, radar_frame_idx, seq)
+        # patches = np.stack(depth_patches).astype(np.float32)
+        # shifted_polar = correct_offsets(radar_frame, radar_frame_idx, seq)
         # filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)
         t1 = time.perf_counter()
 
@@ -470,24 +488,24 @@ for seq in bd.sequences:
         t2 = time.perf_counter()
         print(f"Elapsed time: {t2 - t0:.6f} s (without save is {t1 - t0:.6f} s)")
 
-        map_pts = map_pts_all[199]
+        # map_pts = map_pts_all[199]
 
         # plot point cloud patch
-        pcd.points = o3d.utility.Vector3dVector(map_pts.T)
-        pcd.paint_uniform_color((0.1*curr_submap.run, 0.25*curr_submap.run, 0.45))
-        colors = np.asarray(pcd.colors)
+        # pcd.points = o3d.utility.Vector3dVector(map_pts.T)
+        # pcd.paint_uniform_color((0.1*curr_submap.run, 0.25*curr_submap.run, 0.45))
+        # colors = np.asarray(pcd.colors)
 
         # For video playing in Open3D
-        if first:
-            first = False
-            paused = True
-            vis.add_geometry(pcd)
-        else:
-            vis.update_geometry(pcd)
-        t = time.time()
-        while time.time() - t < 0.1 or paused:
-            vis.poll_events()
-            vis.update_renderer()
+        # if first:
+        #     first = False
+        #     paused = True
+        #     vis.add_geometry(pcd)
+        # else:
+        #     vis.update_geometry(pcd)
+        # t = time.time()
+        # while time.time() - t < 0.1 or paused:
+        #     vis.poll_events()
+        #     vis.update_renderer()
 
         radar_frame.unload_data()
         print("radar frame unloaded!")

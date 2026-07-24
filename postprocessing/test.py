@@ -225,7 +225,7 @@ for seq in bd.sequences:
         field = reconstructor.reconstruct(
             xyz,
             normal=normals,
-            detail_level=1.0,
+            detail_level=0.5,
         )
 
         if field is None:
