@@ -12,6 +12,8 @@ from pyboreas import BoreasDataset
 from pyboreas.utils.odometry import interpolate_poses
 from pyboreas.utils.utils import get_inverse_tf
 from pylgmath import Transformation
+from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter1d, shift
 from vtr_pose_graph.graph_iterators import TemporalIterator
 import vtr_pose_graph.graph_utils as g_utils
 from vtr_utils.bag_file_parsing import Rosbag2GraphFactory
@@ -100,11 +102,94 @@ def build_lidar_to_robot_transform(seq):
     return T_applanix_lidar.inverse() * T_applanix_wheel * T_wheel_robot
 
 
+def correct_offsets(radar_frame, radar_frame_idx, seq):
+    prev_radar_frame = seq.radar_frames[radar_frame_idx - 1]
+    next_radar_frame = seq.radar_frames[radar_frame_idx + 1]
+    body_rates = [
+        prev_radar_frame.body_rate,
+        radar_frame.body_rate,
+        next_radar_frame.body_rate,
+    ]
+    times_us = [
+        prev_radar_frame.timestamp_micro,
+        radar_frame.timestamp_micro,
+        next_radar_frame.timestamp_micro,
+    ]
+
+    azimuth_timestamps = radar_frame.timestamps.flatten()
+    f = interp1d(times_us, body_rates, axis=0, kind="quadratic")
+    azimuth_body_rates = f(azimuth_timestamps)
+
+    shifted_polar = shift(
+        radar_frame.polar,
+        shift=(0, seq.calib.radar_offset / radar_frame.resolution),
+        order=3,
+        mode="nearest",
+    )
+
+    vx = -azimuth_body_rates[:, 0]
+    vy = -azimuth_body_rates[:, 1]
+    u = vx * np.cos(radar_frame.azimuths) + vy * np.sin(radar_frame.azimuths)
+    beta = seq.calib.radar_doppler_beta
+    delta_r_d = beta * u
+    chirp_sign = np.where(radar_frame.chirp_type == 0, -1, radar_frame.chirp_type)
+    doppler_shift = chirp_sign * delta_r_d / radar_frame.resolution
+
+    for idx in range(len(shifted_polar)):
+        shifted_polar[idx] = shift(
+            shifted_polar[idx],
+            shift=-doppler_shift[idx],
+            order=3,
+            mode="nearest",
+        )
+
+    return shifted_polar
+
+
+def cen_filter_2d(polar_image, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5):
+    mean_val = np.mean(polar_image, axis=1, keepdims=True)
+    q = polar_image - mean_val
+
+    p = gaussian_filter1d(q, sigma=sigma_gauss, axis=1, mode="reflect")
+
+    neg_mask = q < 0
+    count = np.sum(neg_mask, axis=1, keepdims=True)
+    q_neg_sq = (q * neg_mask) ** 2
+    sum_q_neg_sq = np.sum(q_neg_sq, axis=1, keepdims=True)
+    sigma_q_sq = np.divide(
+        2.0 * sum_q_neg_sq,
+        count,
+        out=np.zeros_like(count, dtype=float),
+        where=count != 0,
+    )
+    sigma_q = noise_scale * np.sqrt(sigma_q_sq)
+    sigma_q[count == 0] = 0.034
+
+    threshold = z_q * sigma_q
+    eps = 1e-8
+    pow_p = (p / (sigma_q + eps)) ** 2
+    pow_qp = ((q - p) / (sigma_q + eps)) ** 2
+    npp = np.exp(-0.5 * pow_p)
+    nqp = np.exp(-0.5 * pow_qp)
+
+    y = q * (1.0 - nqp) + p * (nqp - npp)
+    y[y <= threshold] = 0.0
+    return y
+
+
 def save_patches(seq_dir, patches, fov_deg, radar_frame, method):
     output_dir = Path(seq_dir) / "input" / f"patch_arrays_{fov_deg}_deg_{method}"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{radar_frame}.npy"
-    np.save(output_path, patches)
+    np.save(output_path, np.rint(patches * 100).astype(np.uint16))
+    return output_path
+
+
+def save_labels(seq_dir, folder_name, polar, radar_frame):
+    labels_dir = Path(seq_dir) / folder_name
+    labels_dir.mkdir(parents=True, exist_ok=True)
+    output_path = labels_dir / f"{radar_frame}.npy"
+    np.save(output_path, polar)
     return output_path
 
 
@@ -348,14 +433,31 @@ def run_sequence(
         patch_time = perf_counter() - t0
 
         t0 = perf_counter()
+        shifted_polar = correct_offsets(radar_frame, radar_frame_idx, seq)
+        filtered_polar = cen_filter_2d(
+            shifted_polar,
+            sigma_gauss=15.0,
+            z_q=2.5,
+            noise_scale=0.5,
+        )
+        polar_time = perf_counter() - t0
+
+        t0 = perf_counter()
         suffix = f"_{method_suffix}" if method_suffix else ""
         method = f"optix{suffix}_aug" if data_augment else f"optix{suffix}"
+        sequence_output_dir = Path(output_root) / seq.ID
         mesh_path = save_patches(
-            seq_dir=Path(output_root) / seq.ID,
+            seq_dir=sequence_output_dir,
             patches=mesh_patches,
             fov_deg=patch_config["fov_deg"],
             radar_frame=radar_frame.frame,
             method=method,
+        )
+        labels_path = save_labels(
+            seq_dir=seq.seq_root,
+            folder_name="filtered_labels",
+            polar=filtered_polar,
+            radar_frame=radar_frame.frame,
         )
         save_time = perf_counter() - t0
 
@@ -366,7 +468,7 @@ def run_sequence(
         print(
             f"Frame {radar_frame.frame} | total {perf_counter() - frame_start:.3f}s | "
             f"poses {pose_time:.3f}s | patches {patch_time:.3f}s | "
-            f"save {save_time:.3f}s"
+            f"radar postprocessing {polar_time:.3f}s | save {save_time:.3f}s"
         )
         if mesh_load_stats["mesh_disk_load"] > 0.0:
             print(
@@ -378,6 +480,7 @@ def run_sequence(
             f"avg hit pixels {patch_stats['hit_pixels'] / num_patches:.1f}"
         )
         print(f"  saved: {mesh_path}")
+        print(f"  saved: {labels_path}")
         if data_augment:
             print(
                 f"  saved augmented patches: shape {list(mesh_patches.shape)} | "
