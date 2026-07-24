@@ -454,7 +454,7 @@ def run_sequence(
             method=method,
         )
         labels_path = save_labels(
-            seq_dir=seq.seq_root,
+            seq_dir=sequence_output_dir,
             folder_name="filtered_labels",
             polar=filtered_polar,
             radar_frame=radar_frame.frame,
