@@ -514,7 +514,7 @@ def main():
     )
     parser.add_argument(
         "--method-suffix",
-        default="optix",
+        default="",
         help="Suffix for the output patch folder.",
     )
     args = parser.parse_args()
