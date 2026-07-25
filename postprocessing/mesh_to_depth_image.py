@@ -496,10 +496,10 @@ def main():
     parser = argparse.ArgumentParser(
         description="Generate radar-azimuth depth patches from cached submap meshes."
     )
-    parser.add_argument("--radar-start-frame", type=int, default=65)
+    parser.add_argument("--radar-start-frame", type=int, default=1)
     parser.add_argument("--radar-end-frame", type=int, default=None)
     parser.add_argument("--sequence-id", default=None)
-    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--fov-deg", type=float, default=6.0)
     parser.add_argument("--res-deg", type=float, default=0.1)
     parser.add_argument("--data-augment", action="store_true")
