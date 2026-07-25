@@ -18,10 +18,13 @@ class RadarTranslatorCNN(nn.Module):
         self.sigma_bins = sigma_bins
         self.half_window = half_window
 
-        # Learnable scalar for the depth waveform skip
-        self.depth_skip_scale = nn.Parameter(torch.tensor(1.0))
+        # Learnable scalar for the complete depth-waveform skip branch.
+        self.depth_skip_scale = nn.Parameter(torch.tensor(0.4))
 
-        # -------- 1. CNN Feature Extractor (Patch Generator) --------
+        # ============================================================
+        # 1. MAIN CNN FEATURE EXTRACTOR
+        # ============================================================
+        # Spatial sizes:
         # 61 -> 30 -> 15 -> 7
         self.cnn_backbone = nn.Sequential(
             nn.Conv2d(1, 64, kernel_size=3, padding=1),
@@ -40,15 +43,23 @@ class RadarTranslatorCNN(nn.Module):
             nn.MaxPool2d(2),
         )
 
-        # -------- 2. Positional Encoding --------
+        # ============================================================
+        # 2. POSITIONAL ENCODING
+        # ============================================================
         self.num_patches = 7 * 7
         self.embed_dim = 256
 
         self.pos_embed = nn.Parameter(
-            torch.randn(1, self.num_patches, self.embed_dim) * 0.02
+            torch.randn(
+                1,
+                self.num_patches,
+                self.embed_dim,
+            ) * 0.02
         )
 
-        # -------- 3. Transformer Bottleneck --------
+        # ============================================================
+        # 3. TRANSFORMER BOTTLENECK
+        # ============================================================
         transformer_layer = nn.TransformerEncoderLayer(
             d_model=self.embed_dim,
             nhead=8,
@@ -63,7 +74,10 @@ class RadarTranslatorCNN(nn.Module):
             num_layers=4,
         )
 
-        # -------- 4. Sequence Translator --------
+        # ============================================================
+        # 4. SEQUENCE TRANSLATOR
+        # ============================================================
+        # Sequence length:
         # 49 -> 171
         self.latent_translator = nn.Sequential(
             nn.ConvTranspose1d(
@@ -77,110 +91,318 @@ class RadarTranslatorCNN(nn.Module):
             nn.ReLU(inplace=True),
         )
 
-        # -------- 5. 1D Waveform Decoder Body --------
-        # Same as before up to [B, 8, 2736]
+        # ============================================================
+        # 5. 1D WAVEFORM DECODER BODY
+        # ============================================================
+        # Sequence lengths:
+        # 171 -> 342 -> 684 -> 1368 -> 2736
         self.decoder_body = nn.Sequential(
-            nn.ConvTranspose1d(64, 64, kernel_size=4, stride=2, padding=1),
+            nn.ConvTranspose1d(
+                64,
+                64,
+                kernel_size=4,
+                stride=2,
+                padding=1,
+            ),
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
 
-            nn.ConvTranspose1d(64, 32, kernel_size=4, stride=2, padding=1),
+            nn.ConvTranspose1d(
+                64,
+                32,
+                kernel_size=4,
+                stride=2,
+                padding=1,
+            ),
             nn.BatchNorm1d(32),
             nn.ReLU(inplace=True),
 
-            nn.ConvTranspose1d(32, 16, kernel_size=4, stride=2, padding=1),
+            nn.ConvTranspose1d(
+                32,
+                16,
+                kernel_size=4,
+                stride=2,
+                padding=1,
+            ),
             nn.BatchNorm1d(16),
             nn.ReLU(inplace=True),
 
-            nn.ConvTranspose1d(16, 8, kernel_size=4, stride=2, padding=1),
+            nn.ConvTranspose1d(
+                16,
+                8,
+                kernel_size=4,
+                stride=2,
+                padding=1,
+            ),
             nn.BatchNorm1d(8),
             nn.ReLU(inplace=True),
         )
 
-        # -------- 6. Final Fusion Decoder --------
-        # Original final block was:
-        #   Conv1d(8, 8)
-        #   Conv1d(8, 1)
+        # ============================================================
+        # 6. EXPERIMENT 1: LEARNED PIXEL CONFIDENCE CNN
+        # ============================================================
         #
-        # Now we concatenate depth waveform prior:
-        #   decoder feature: [B, 8, L]
-        #   depth prior:     [B, 1, L]
-        #   concat:          [B, 9, L]
+        # Input:
+        #     [B, 1, 61, 61]
+        #
+        # Output:
+        #     [B, 1, 61, 61]
+        #
+        # Each output value is a confidence in [0, 1].
+        #
+        # This branch is intentionally small so Experiment 1 changes
+        # only the depth-waveform prior and does not significantly
+        # alter the capacity of the main network.
+        self.depth_confidence_cnn = nn.Sequential(
+            # Ordinary spatial convolution.
+            nn.Conv2d(
+                in_channels=1,
+                out_channels=16,
+                kernel_size=3,
+                padding=1,
+            ),
+            nn.ReLU(inplace=True),
+
+            # Depthwise spatial convolution:
+            # each of the 16 channels is filtered separately.
+            nn.Conv2d(
+                in_channels=16,
+                out_channels=16,
+                kernel_size=3,
+                padding=1,
+                groups=16,
+            ),
+            nn.ReLU(inplace=True),
+
+            # Pointwise channel mixing.
+            nn.Conv2d(
+                in_channels=16,
+                out_channels=16,
+                kernel_size=1,
+            ),
+            nn.ReLU(inplace=True),
+
+            # Produce one confidence logit per depth pixel.
+            nn.Conv2d(
+                in_channels=16,
+                out_channels=1,
+                kernel_size=1,
+            ),
+
+            nn.Sigmoid(),
+        )
+
+        # Initialize the final confidence layer so that the initial
+        # confidence is approximately:
+        #
+        # sigmoid(4) ~= 0.982
+        #
+        # Therefore the model initially behaves similarly to an
+        # unweighted depth prior.
+        final_confidence_conv = self.depth_confidence_cnn[-2]
+
+        nn.init.zeros_(final_confidence_conv.weight)
+        nn.init.constant_(final_confidence_conv.bias, 4.0)
+
+        # ============================================================
+        # 7. FIXED GAUSSIAN WAVEFORM KERNEL
+        # ============================================================
+        #
+        # Registering the kernel as a buffer means:
+        # - it is moved automatically with model.to(device);
+        # - it is stored in checkpoints;
+        # - it is not treated as a learnable parameter;
+        # - it does not need to be rebuilt every forward pass.
+        offsets = torch.arange(
+            -half_window,
+            half_window + 1,
+            dtype=torch.float32,
+        )
+
+        gaussian_kernel = torch.exp(
+            -0.5 * (offsets / sigma_bins) ** 2
+        )
+
+        # Peak normalization:
+        # the central kernel coefficient is exactly 1.
+        gaussian_kernel = (
+            gaussian_kernel / gaussian_kernel.max()
+        )
+
+        gaussian_kernel = gaussian_kernel.view(1, 1, -1)
+
+        self.register_buffer(
+            "depth_gaussian_kernel",
+            gaussian_kernel,
+        )
+
+        # ============================================================
+        # 8. FINAL FUSION DECODER
+        # ============================================================
+        #
+        # Decoder feature:
+        #     [B, 8, 2736]
+        #
+        # Learned depth prior:
+        #     [B, 1, 2736]
+        #
+        # Concatenated:
+        #     [B, 9, 2736]
         self.final_fusion = nn.Sequential(
-            nn.Conv1d(9, 8, kernel_size=5, padding=2),
+            nn.Conv1d(
+                9,
+                8,
+                kernel_size=5,
+                padding=2,
+            ),
             nn.BatchNorm1d(8),
             nn.ReLU(inplace=True),
 
-            nn.Conv1d(8, 1, kernel_size=5, padding=2),
+            nn.Conv1d(
+                8,
+                1,
+                kernel_size=5,
+                padding=2,
+            ),
         )
 
-    def batch_depth_to_waveforms_soft_local(self, patches, eps=1e-8):
+    def batch_depth_to_waveforms_soft_local(
+        self,
+        patches,
+        confidence,
+    ):
         """
-        Differentiable soft depth-to-waveform prior.
+        Construct the Experiment 1 learned depth-waveform prior.
 
-        patches: [B, 1, H, W]
-        returns: [B, output_bins]
+        The depth values determine the hard range-bin indices.
+        The learned confidence values determine how much evidence
+        each pixel contributes.
 
-        Important:
-        - No hard round-to-bin assignment.
-        - Uses continuous bin coordinate u = depth / resolution.
-        - Uses floor only to choose local support.
-        - Uses peak-normalized Gaussian weights.
-        - Uses smooth saturation to keep output in [0, 1).
+        Pipeline:
+            depth
+            -> hard rounded range-bin index
+
+            confidence
+            -> weighted scatter_add into range bins
+
+            accumulated waveform
+            -> fixed Gaussian convolution
+            -> smooth saturation: 1 - exp(-x)
+
+        The operation is differentiable with respect to confidence,
+        but intentionally not differentiable with respect to depth
+        bin assignment.
+
+        Args:
+            patches:
+                Raw depth patches with shape [B, 1, H, W].
+
+            confidence:
+                Learned confidence map with shape [B, 1, H, W].
+
+        Returns:
+            Waveform tensor with shape [B, self.output_bins].
         """
-        B = patches.shape[0]
-        device = patches.device
+        if patches.ndim != 4:
+            raise ValueError(
+                "Expected patches with shape [B, C, H, W], "
+                f"but received {tuple(patches.shape)}."
+            )
+
+        if confidence.shape != patches[:, :1].shape:
+            raise ValueError(
+                "confidence must have shape [B, 1, H, W]. "
+                f"Received patches shape {tuple(patches.shape)} "
+                f"and confidence shape {tuple(confidence.shape)}."
+            )
+
+        batch_size = patches.shape[0]
         dtype = patches.dtype
+        device = patches.device
 
-        depths = patches[:, 0].reshape(B, -1)  # [B, N]
-        valid = depths > 0
+        # Flatten the depth patch and confidence map:
+        #
+        # depths:      [B, H*W]
+        # confidence:  [B, H*W]
+        depths = patches[:, 0].reshape(batch_size, -1)
+        confidence = confidence[:, 0].reshape(batch_size, -1)
 
-        # Continuous range-bin coordinate
-        u = depths / self.resolution  # [B, N]
+        # Convert metric depth to the nearest discrete radar bin.
+        #
+        # The integer index is not differentiable with respect to depth,
+        # which is acceptable because the input geometry is fixed.
+        indices = torch.round(
+            depths / self.resolution
+        ).long()
 
-        # Only used to choose local Gaussian support
-        base = torch.floor(u).long()  # [B, N]
-
-        offsets = torch.arange(
-            -self.half_window,
-            self.half_window + 1,
-            device=device,
-            dtype=torch.long,
-        )  # [K]
-
-        idx = base.unsqueeze(-1) + offsets.view(1, 1, -1)  # [B, N, K]
-
-        in_bounds = (
-            (idx >= 0)
-            & (idx < self.output_bins)
-            & valid.unsqueeze(-1)
+        # A valid depth must:
+        # - be finite;
+        # - be positive;
+        # - map inside the output waveform.
+        valid = (
+            torch.isfinite(depths)
+            & (depths > 0)
+            & (indices >= 0)
+            & (indices < self.output_bins)
         )
 
-        # Differentiable with respect to u/depths
-        diff = idx.to(dtype) - u.unsqueeze(-1)  # [B, N, K]
+        # scatter_add_ requires every supplied index to be in bounds,
+        # even when the corresponding source value is zero.
+        safe_indices = indices.clamp(
+            min=0,
+            max=self.output_bins - 1,
+        )
 
-        # Peak-normalized Gaussian, not area-normalized
-        weights = torch.exp(-0.5 * (diff / self.sigma_bins) ** 2)
-        weights = weights * in_bounds.to(dtype)
+        # Invalid pixels contribute exactly zero confidence.
+        weighted_confidence = (
+            confidence * valid.to(dtype)
+        )
 
-        idx_safe = idx.clamp(0, self.output_bins - 1)
-
+        # Initialize the hard-bin confidence histogram.
         waveform = torch.zeros(
-            B,
+            batch_size,
             self.output_bins,
-            device=device,
             dtype=dtype,
+            device=device,
         )
 
+        # Sum all pixel confidences that land in the same range bin.
+        #
+        # Unlike binary assignment:
+        #
+        #     waveform[index] = 1
+        #
+        # this preserves the contribution and gradient from every
+        # confidence value.
         waveform.scatter_add_(
             dim=1,
-            index=idx_safe.reshape(B, -1),
-            src=weights.reshape(B, -1),
+            index=safe_indices,
+            src=weighted_confidence,
         )
 
-        # Smooth bounded accumulation.
-        # One perfectly centered point gives 1 - exp(-1) ~= 0.632.
-        # Multiple overlapping points approach 1.
+        # Match the kernel dtype to the input. This is useful when
+        # training with automatic mixed precision.
+        kernel = self.depth_gaussian_kernel.to(
+            dtype=waveform.dtype
+        )
+
+        # Smooth each batch waveform using the same fixed kernel.
+        waveform = F.conv1d(
+            waveform.unsqueeze(1),
+            kernel,
+            padding=self.half_window,
+        ).squeeze(1)
+
+        # Smoothly bound the waveform to [0, 1).
+        #
+        # This preserves accumulated evidence:
+        #
+        # x = 0 -> 0
+        # x = 1 -> 0.632
+        # x = 2 -> 0.865
+        #
+        # while preventing arbitrarily large values when many depth
+        # pixels contribute to nearby range bins.
         waveform = 1.0 - torch.exp(-waveform)
 
         return waveform
@@ -188,29 +410,77 @@ class RadarTranslatorCNN(nn.Module):
     def forward(self, x):
         raw_patch = x
 
-        # -------- Main learned branch --------
-        x = self.cnn_backbone(x)            # [B, 256, 7, 7]
+        # ============================================================
+        # MAIN LEARNED BRANCH
+        # ============================================================
+        x = self.cnn_backbone(x)        # [B, 256, 7, 7]
 
-        B, C, H, W = x.size()
-        x = x.view(B, C, H * W)             # [B, 256, 49]
-        x = x.permute(0, 2, 1)              # [B, 49, 256]
+        batch_size, channels, height, width = x.shape
 
-        x = x + self.pos_embed              # [B, 49, 256]
-        x = self.transformer_encoder(x)     # [B, 49, 256]
+        x = x.view(
+            batch_size,
+            channels,
+            height * width,
+        )                               # [B, 256, 49]
 
-        x = x.permute(0, 2, 1)              # [B, 256, 49]
-        x = self.latent_translator(x)       # [B, 64, 171]
+        x = x.permute(0, 2, 1)          # [B, 49, 256]
 
-        x = self.decoder_body(x)            # [B, 8, 2736]
+        x = x + self.pos_embed          # [B, 49, 256]
 
-        # -------- Depth-to-waveform skip branch --------
-        depth_prior = self.batch_depth_to_waveforms_soft_local(raw_patch)
-        depth_prior = depth_prior.unsqueeze(1)  # [B, 1, 2736]
+        x = self.transformer_encoder(x) # [B, 49, 256]
 
-        depth_prior = self.depth_skip_scale * depth_prior
+        x = x.permute(0, 2, 1)          # [B, 256, 49]
 
-        # -------- Late fusion --------
-        x = torch.cat([x, depth_prior], dim=1)  # [B, 9, 2736]
-        x = self.final_fusion(x)               # [B, 1, 2736]
+        x = self.latent_translator(x)   # [B, 64, 171]
 
-        return x.squeeze(1)
+        x = self.decoder_body(x)        # [B, 8, 2736]
+
+        # ============================================================
+        # EXPERIMENT 1 DEPTH-PRIOR BRANCH
+        # ============================================================
+
+        # Predict one confidence per input depth pixel.
+        confidence = self.depth_confidence_cnn(
+            raw_patch
+        )                               # [B, 1, 61, 61]
+
+        # Ensure invalid depth pixels have exactly zero confidence.
+        #
+        # This masking also means that the displayed confidence map
+        # represents only valid geometric input.
+        valid_depth = (
+            torch.isfinite(raw_patch)
+            & (raw_patch > 0)
+        )
+
+        confidence = (
+            confidence * valid_depth.to(confidence.dtype)
+        )
+
+        # Convert the learned confidence map into a smooth waveform.
+        depth_prior = (
+            self.batch_depth_to_waveforms_soft_local(
+                patches=raw_patch,
+                confidence=confidence,
+            )
+        )                               # [B, 2736]
+
+        depth_prior = depth_prior.unsqueeze(1)
+                                            # [B, 1, 2736]
+
+        # Retain the original global learnable skip scale.
+        depth_prior = (
+            self.depth_skip_scale * depth_prior
+        )
+
+        # ============================================================
+        # LATE FUSION
+        # ============================================================
+        x = torch.cat(
+            [x, depth_prior],
+            dim=1,
+        )                               # [B, 9, 2736]
+
+        x = self.final_fusion(x)        # [B, 1, 2736]
+
+        return x.squeeze(1)             # [B, 2736]
