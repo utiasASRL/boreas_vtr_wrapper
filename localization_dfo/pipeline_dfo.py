@@ -576,7 +576,7 @@ def main():
     parser.add_argument(
         "--depth-backend",
         choices=["torch_mesh", "optix", "compare"],
-        default="torch_mesh",
+        default="optix",
         help="compare checks the first calls, then continues optimization with OptiX.",
     )
     parser.add_argument("--compare-max-calls", type=int, default=1)
@@ -614,7 +614,7 @@ def main():
     lidar_results_dir = vtr_results / "lidar"
     weights_path = os.path.join(
         boreas_vtr_wrapper_dir,
-        "model_dev/model_weights/6_deg_attentional_skip_bigger/best.pth",
+        "model_dev/route_weights/1-suburb/best_total.pth",
     )
     model = load_radar_translator_model(weights_path, device)
     dataset = BoreasDataset(
