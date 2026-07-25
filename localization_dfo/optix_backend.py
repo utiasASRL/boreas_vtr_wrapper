@@ -26,14 +26,15 @@ class OptixDepthBackend:
         self.pose_count = 0
         self.mesh_ready = False
         self.scan_ready = False
-        self.tracer = optix_range_tracer.OptixRangeTracer(
-            width=self.width,
-            height=self.height,
-            theta_min=float(np.rad2deg(geom.theta_min)),
-            theta_max=float(np.rad2deg(geom.theta_max)),
-            phi_min=float(np.rad2deg(geom.phi_min)),
-            phi_max=float(np.rad2deg(geom.phi_max)),
-        )
+        with torch.cuda.device(self.device):
+            self.tracer = optix_range_tracer.OptixRangeTracer(
+                width=self.width,
+                height=self.height,
+                theta_min=float(np.rad2deg(geom.theta_min)),
+                theta_max=float(np.rad2deg(geom.theta_max)),
+                phi_min=float(np.rad2deg(geom.phi_min)),
+                phi_max=float(np.rad2deg(geom.phi_max)),
+            )
 
     def set_mesh(self, vertices, triangles):
         self._check_tensor(vertices, "vertices", torch.float32, 2)
