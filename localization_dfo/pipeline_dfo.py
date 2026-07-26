@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from time import perf_counter
 
+import cv2
 import numpy as np
 import torch
 from pyboreas import BoreasDataset
@@ -20,22 +21,10 @@ from localization_dfo.io_utils import (
     get_path_vertices_with_submaps,
     load_submap_mesh_to_enu,
 )
-from localization_dfo.mesh_cost import (
-    GeometryParams,
-    ResidualBuildOptions,
-    compute_radar_cost_only_fast,
-    left_se3_retract,
-    torch_mesh_depth_geometry_batch,
-)
-from localization_dfo.optix_backend import (
-    OptixDepthBackend,
-    compare_depth_patches,
-    compute_optix_cost,
-    print_comparison_metrics,
-)
+from localization_dfo.optix_backend import OptixDepthBackend, compute_optix_cost
 from localization_dfo.optimizer import ObjectiveLogger, extract_best_from_result, run_imfil_direct
 from localization_dfo.radar_translator_cnn import RadarTranslatorCNN
-from localization_dfo.transforms import make_delta_T
+from localization_dfo.transforms import left_se3_retract, make_delta_T
 
 
 RESULT_FIELDNAMES = [
@@ -57,27 +46,6 @@ RESULT_FIELDNAMES = [
     "final_cost",
     "iterations",
 ]
-
-MESH_TIMING_KEYS = [
-    ("optix_trace_time_s", "OptiX trace"),
-    ("point_transform_time_s", "point transform"),
-    ("cartesian_frustum_mask_time_s", "cartesian frustum mask"),
-    ("candidate_face_selection_time_s", "candidate face selection"),
-    ("selected_geometry_time_s", "selected geometry projection"),
-    ("mesh_rasterization_time_s", "mesh rasterization"),
-    ("geometry_to_cpu_time_s", "geometry GPU to CPU"),
-]
-
-RASTER_TIMING_KEYS = [
-    ("raster_face_filter_time_s", "face filter"),
-    ("raster_bbox_time_s", "pixel bounding boxes"),
-    ("raster_pair_generation_time_s", "face-pixel pair generation"),
-    ("raster_barycentric_time_s", "barycentric weights"),
-    ("raster_depth_interpolation_time_s", "depth interpolation"),
-    ("raster_zbuffer_time_s", "z-buffer scatter"),
-    ("raster_finalize_time_s", "finalize output/stats"),
-]
-
 
 def load_radar_translator_model(weights_path, device):
     model = RadarTranslatorCNN().to(device)
@@ -219,59 +187,49 @@ def append_localization_result(csv_path, result_row):
         csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES).writerow(result_row)
 
 
-def print_dfo_timing_report(optimization_time_s, logger, cost_call_diagnostics):
+def save_cartesian_radar_image(radar_frame, polar, output_path):
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    radar_frame.polar = polar
+    cart = radar_frame.polar_to_cart(
+        cart_resolution=0.2384,
+        cart_pixel_width=1000,
+        in_place=False,
+    )
+    image = (np.clip(cart, 0.0, 1.0) * 255.0).astype(np.uint8)
+    if not cv2.imwrite(str(output_path), image):
+        raise IOError(f"Could not save radar image: {output_path}")
+
+
+def predict_radar_at_pose(T, model, optix_backend):
+    depth = optix_backend.trace(T)
+    with torch.no_grad():
+        return torch.sigmoid(model(depth.unsqueeze(1))).cpu().numpy()
+
+
+def print_dfo_timing_report(optimization_time_s, logger, cost_call_timings):
     cost_calls = len(logger.history_f)
+    if len(cost_call_timings) != cost_calls:
+        raise RuntimeError(
+            f"Timing count {len(cost_call_timings)} does not match cost call count {cost_calls}."
+        )
+
     print("DFO timing")
     print(f"  optimization wall time [s]: {optimization_time_s:.6f}")
     print(f"  cost function calls: {cost_calls}")
-    if cost_calls:
-        print(f"  mean wall time / cost call [s]: {optimization_time_s / cost_calls:.6f}")
-
-    cost_wall_time_s = sum(call["wall_time_s"] for call in cost_call_diagnostics)
-    if cost_wall_time_s:
-        print(f"  total forward cost wall time [s]: {cost_wall_time_s:.6f}")
-    if not cost_call_diagnostics:
+    if not cost_calls:
         return
 
-    top_buckets = [
-        ("depth_patch_generation_time_s", "depth patch generation"),
-        ("model_inference_time_s", "model inference"),
-        ("cost_compute_time_s", "cost computation"),
-    ]
-    totals = {key: sum(call[key] for call in cost_call_diagnostics) for key, _ in top_buckets}
-    mesh_totals = {
-        key: sum(call["depth_patch_breakdown"].get(key, 0.0) for call in cost_call_diagnostics)
-        for key, _ in MESH_TIMING_KEYS
-    }
-    raster_totals = {
-        key: sum(call["raster_breakdown"].get(key, 0.0) for call in cost_call_diagnostics)
-        for key, _ in RASTER_TIMING_KEYS
-    }
-    first = cost_call_diagnostics[0]
-
-    print("  first forward cost call [s]:")
-    print(f"    depth patches: {first['patch_count']}")
-    for key, label in top_buckets:
-        print(f"    {label}: {first[key]:.6f}")
-    print("    depth patch generation breakdown:")
-    for key, label in MESH_TIMING_KEYS:
-        print(f"      {label}: {first['depth_patch_breakdown'].get(key, 0.0):.6f}")
-    print("    mesh rasterization breakdown:")
-    for key, label in RASTER_TIMING_KEYS:
-        print(f"      {label}: {first['raster_breakdown'].get(key, 0.0):.6f}")
-
-    print("  total forward cost breakdown [s]:")
-    for key, label in top_buckets:
-        mean_s = totals[key] / max(cost_calls, 1)
-        print(f"    {label}: {totals[key]:.6f} total, {mean_s:.6f}/call")
-    print("  total depth patch generation breakdown [s]:")
-    for key, label in MESH_TIMING_KEYS:
-        mean_s = mesh_totals[key] / max(cost_calls, 1)
-        print(f"    {label}: {mesh_totals[key]:.6f} total, {mean_s:.6f}/call")
-    print("  total mesh rasterization breakdown [s]:")
-    for key, label in RASTER_TIMING_KEYS:
-        mean_s = raster_totals[key] / max(cost_calls, 1)
-        print(f"    {label}: {raster_totals[key]:.6f} total, {mean_s:.6f}/call")
+    depth_time_s = sum(timing["depth_patch_generation_time_s"] for timing in cost_call_timings)
+    model_time_s = sum(timing["model_inference_time_s"] for timing in cost_call_timings)
+    print(f"  mean wall time / cost call [s]: {optimization_time_s / cost_calls:.6f}")
+    print(
+        f"  depth patch generation [s]: {depth_time_s:.6f} total, "
+        f"{depth_time_s / cost_calls:.6f}/call"
+    )
+    print(
+        f"  model inference [s]: {model_time_s:.6f} total, "
+        f"{model_time_s / cost_calls:.6f}/call"
+    )
 
 
 def print_localization_error_report(T_init, T_hat, T_gt):
@@ -289,66 +247,6 @@ def print_localization_error_report(T_init, T_hat, T_gt):
     print(f"  final rot norm [deg]:   {np.linalg.norm(final_rpy_deg):.6e}")
 
 
-def geometry_params_from_config(patch_config):
-    return GeometryParams(
-        theta_min=patch_config["theta_min"],
-        theta_max=patch_config["theta_max"],
-        phi_min=patch_config["phi_min"],
-        phi_max=patch_config["phi_max"],
-        dtheta=patch_config["dtheta"],
-        dphi=patch_config["dphi"],
-        width=patch_config["width"],
-        height=patch_config["height"],
-        max_uv_edge_length=patch_config["max_uv_edge_length"],
-        max_depth_jump=patch_config["max_depth_jump"],
-        fill_value=patch_config["fill_value"],
-    )
-
-
-def summarize_cost_call(result, wall_time_s):
-    breakdown = {key: 0.0 for key, _ in MESH_TIMING_KEYS}
-    raster_breakdown = {key: 0.0 for key, _ in RASTER_TIMING_KEYS}
-    depth_patch_generation_time_s = 0.0
-    model_inference_time_s = 0.0
-    cost_compute_time_s = 0.0
-
-    for diag in result.diagnostics:
-        timing = diag.get("timing", {})
-        depth_patch_generation_time_s += float(timing.get("cost_forward_time_s", 0.0))
-        model_inference_time_s += float(timing.get("model_forward_time_s", 0.0))
-        cost_compute_time_s += float(timing.get("cost_compute_time_s", 0.0))
-        for key in breakdown:
-            breakdown[key] += float(timing.get(key, 0.0))
-        for key in raster_breakdown:
-            raster_breakdown[key] += float(timing.get(key, 0.0))
-
-    return {
-        "wall_time_s": wall_time_s,
-        "cost": result.cost,
-        "patch_count": len(result.diagnostics),
-        "depth_patch_generation_time_s": depth_patch_generation_time_s,
-        "depth_patch_breakdown": breakdown,
-        "raster_breakdown": raster_breakdown,
-        "model_inference_time_s": model_inference_time_s,
-        "cost_compute_time_s": cost_compute_time_s,
-    }
-
-
-def summarize_optix_cost_call(cost, timing, wall_time_s, patch_count):
-    depth_breakdown = {key: 0.0 for key, _ in MESH_TIMING_KEYS}
-    depth_breakdown["optix_trace_time_s"] = timing["optix_trace_time_s"]
-    return {
-        "wall_time_s": wall_time_s,
-        "cost": cost,
-        "patch_count": patch_count,
-        "depth_patch_generation_time_s": timing["optix_trace_time_s"],
-        "depth_patch_breakdown": depth_breakdown,
-        "raster_breakdown": {key: 0.0 for key, _ in RASTER_TIMING_KEYS},
-        "model_inference_time_s": timing["model_inference_time_s"],
-        "cost_compute_time_s": timing["cost_compute_time_s"],
-    }
-
-
 def run_sequence(
     map_seq,
     loc_seq,
@@ -361,9 +259,9 @@ def run_sequence(
     results_csv_path,
     mesh_root,
     random_seed,
-    depth_backend,
-    compare_max_calls,
     imfil_budget,
+    save_predictions,
+    save_labels,
 ):
     print(f"Map SequenceID: {map_seq.ID}")
     print(f"Localization SequenceID: {loc_seq.ID}")
@@ -383,21 +281,9 @@ def run_sequence(
     loaded_mesh_submap_stamp_us = None
     mesh_vertices_gpu = None
     mesh_triangles_gpu = None
-    mesh_triangles_long = None
     rng = np.random.default_rng(random_seed)
 
-    geom = geometry_params_from_config(patch_config)
-    residual_options = ResidualBuildOptions(
-        device=str(device),
-        model_output_activation="sigmoid",
-        candidate_batch_size=400,
-        geometry_batch_size=400,
-    )
-    optix_backend = (
-        OptixDepthBackend(geom, device)
-        if depth_backend in {"optix", "compare"}
-        else None
-    )
+    optix_backend = OptixDepthBackend(patch_config, device)
 
     while radar_frame_idx < end_frame + 1:
         radar_frame = loc_seq.get_radar(radar_frame_idx)
@@ -446,89 +332,36 @@ def run_sequence(
                 lidar_pose=lidar_frame.pose,
                 device=device,
             )
-            if depth_backend in {"torch_mesh", "compare"}:
-                mesh_triangles_long = mesh_triangles_gpu.to(torch.long)
-            if optix_backend is not None:
-                optix_backend.set_mesh(mesh_vertices_gpu, mesh_triangles_gpu)
+            optix_backend.set_mesh(mesh_vertices_gpu, mesh_triangles_gpu)
             loaded_mesh_submap_stamp_us = submap_stamp_us
 
         shifted_polar = correct_offsets(radar_frame, radar_frame_idx, loc_seq)
         filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)
 
         radar_polar_cropped = filtered_polar[:, :2736] / 0.5613
-        radar_polar_cropped_gpu = None
-        if optix_backend is not None:
-            if len(radar_polar_cropped) != len(odom_transforms):
-                raise ValueError(
-                    f"Radar rows and odometry pose counts differ: "
-                    f"{len(radar_polar_cropped)} != {len(odom_transforms)}."
-                )
-            radar_polar_cropped_gpu = torch.as_tensor(
-                radar_polar_cropped,
-                device=device,
-                dtype=torch.float32,
-            ).contiguous()
-            optix_backend.set_scan(odom_transforms, radar_azimuths)
+        if len(radar_polar_cropped) != len(odom_transforms):
+            raise ValueError(
+                f"Radar rows and odometry pose counts differ: "
+                f"{len(radar_polar_cropped)} != {len(odom_transforms)}."
+            )
+        radar_polar_cropped_gpu = torch.as_tensor(
+            radar_polar_cropped,
+            device=device,
+            dtype=torch.float32,
+        ).contiguous()
+        optix_backend.set_scan(odom_transforms, radar_azimuths)
 
-        cost_call_diagnostics = []
-        comparison_calls = 0
+        cost_call_timings = []
 
         def cost_fn(eps):
-            nonlocal comparison_calls
-            t_call = perf_counter()
             T_current = left_se3_retract(T=T_init, delta=eps)
-            if depth_backend == "torch_mesh":
-                result = compute_radar_cost_only_fast(
-                    P_v=mesh_vertices_gpu,
-                    mesh_triangles=mesh_triangles_long,
-                    T=T_current,
-                    odom_transforms=odom_transforms,
-                    m_obs_all=radar_polar_cropped,
-                    model=model,
-                    geom=geom,
-                    options=residual_options,
-                    radar_azimuths=radar_azimuths,
-                )
-                cost_call_diagnostics.append(
-                    summarize_cost_call(result, perf_counter() - t_call)
-                )
-                return result.cost
-
-            cost, depth_optix, timing = compute_optix_cost(
+            cost, timing = compute_optix_cost(
                 optix_backend,
                 T_current,
                 radar_polar_cropped_gpu,
                 model,
-                residual_options.model_output_activation,
             )
-            if depth_backend == "compare" and comparison_calls < compare_max_calls:
-                mesh_outputs, _ = torch_mesh_depth_geometry_batch(
-                    P_v=mesh_vertices_gpu,
-                    triangles=mesh_triangles_long,
-                    T=T_current,
-                    odom_batch=odom_transforms,
-                    radar_azimuth_batch=radar_azimuths,
-                    geom=geom,
-                    device=device,
-                )
-                depth_mesh_gpu = torch.as_tensor(
-                    np.stack([output[0] for output in mesh_outputs]),
-                    device=device,
-                    dtype=torch.float32,
-                )
-                print_comparison_metrics(
-                    compare_depth_patches(depth_optix, depth_mesh_gpu)
-                )
-                comparison_calls += 1
-
-            cost_call_diagnostics.append(
-                summarize_optix_cost_call(
-                    cost,
-                    timing,
-                    perf_counter() - t_call,
-                    optix_backend.pose_count,
-                )
-            )
+            cost_call_timings.append(timing)
             return cost
 
         logger = ObjectiveLogger(cost_fn)
@@ -552,7 +385,33 @@ def run_sequence(
         eps_best, _ = extract_best_from_result(result, logger)
         T_hat = left_se3_retract(T=T_init, delta=eps_best)
 
-        print_dfo_timing_report(optimization_time_s, logger, cost_call_diagnostics)
+        image_root = results_csv_path.with_suffix("")
+        if save_labels:
+            save_cartesian_radar_image(
+                radar_frame,
+                filtered_polar / 0.5613,
+                image_root / "labels" / f"{radar_frame.frame}.png",
+            )
+        if save_predictions:
+            predictions = predict_radar_at_pose(
+                T=T_hat,
+                model=model,
+                optix_backend=optix_backend,
+            )
+            if predictions.shape != radar_polar_cropped.shape:
+                raise RuntimeError(
+                    f"Prediction shape {predictions.shape} does not match "
+                    f"cropped radar shape {radar_polar_cropped.shape}."
+                )
+            padded_predictions = np.zeros_like(filtered_polar, dtype=np.float32)
+            padded_predictions[:, :predictions.shape[1]] = predictions
+            save_cartesian_radar_image(
+                radar_frame,
+                padded_predictions,
+                image_root / "predictions" / f"{radar_frame.frame}.png",
+            )
+
+        print_dfo_timing_report(optimization_time_s, logger, cost_call_timings)
         print_localization_error_report(T_init, T_hat, T_gt)
         append_localization_result(
             results_csv_path,
@@ -562,7 +421,7 @@ def run_sequence(
 
         radar_frame.unload_data()
         print("radar frame unloaded!")
-        radar_frame_idx += 100
+        radar_frame_idx += 1
 
 
 def main():
@@ -574,14 +433,9 @@ def main():
     parser.add_argument("--radar-start-frame", type=int, default=65)
     parser.add_argument("--radar-end-frame", type=int, default=None)
     parser.add_argument("--random-seed", type=int, default=0)
-    parser.add_argument(
-        "--depth-backend",
-        choices=["torch_mesh", "optix", "compare"],
-        default="optix",
-        help="compare checks the first calls, then continues optimization with OptiX.",
-    )
-    parser.add_argument("--compare-max-calls", type=int, default=1)
     parser.add_argument("--imfil-budget", type=int, default=120)
+    parser.add_argument("--save-predictions", action="store_true")
+    parser.add_argument("--save-labels", action="store_true")
     output_mode = parser.add_mutually_exclusive_group()
     output_mode.add_argument("--append", action="store_true")
     output_mode.add_argument("--overwrite", action="store_true")
@@ -592,8 +446,6 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.compare_max_calls < 0:
-        raise ValueError("--compare-max-calls must be nonnegative.")
     if args.imfil_budget < 1:
         raise ValueError("--imfil-budget must be positive.")
 
@@ -658,9 +510,9 @@ def main():
         results_csv_path=results_csv_path,
         mesh_root=args.mesh_root,
         random_seed=args.random_seed,
-        depth_backend=args.depth_backend,
-        compare_max_calls=args.compare_max_calls,
         imfil_budget=args.imfil_budget,
+        save_predictions=args.save_predictions,
+        save_labels=args.save_labels,
     )
 
 

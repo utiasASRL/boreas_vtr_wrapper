@@ -20,7 +20,6 @@ from vtr_utils.bag_file_parsing import Rosbag2GraphFactory
 from vtr_utils.plot_utils import convert_points_to_frame
 from perturbation_cost_tests.perturbation_utils import make_delta_T
 
-from localization_dfo.mesh_cost import GeometryParams
 from localization_dfo.optix_backend import OptixDepthBackend
 
 
@@ -193,22 +192,6 @@ def save_labels(seq_dir, folder_name, polar, radar_frame):
     return output_path
 
 
-def geometry_params_from_patch_config(config):
-    return GeometryParams(
-        theta_min=config["theta_min"],
-        theta_max=config["theta_max"],
-        phi_min=config["phi_min"],
-        phi_max=config["phi_max"],
-        dtheta=config["dtheta"],
-        dphi=config["dphi"],
-        width=config["width"],
-        height=config["height"],
-        max_uv_edge_length=config["max_uv_edge_length"],
-        max_depth_jump=config["max_depth_jump"],
-        fill_value=config["fill_value"],
-    )
-
-
 def load_submap_mesh_to_enu(
     mesh_root,
     sequence_id,
@@ -358,8 +341,7 @@ def run_sequence(
     mesh_vertices_gpu = None
     mesh_triangles_gpu = None
     aug_rng = np.random.default_rng(aug_seed)
-    geom = geometry_params_from_patch_config(patch_config)
-    tracer = OptixDepthBackend(geom, device)
+    tracer = OptixDepthBackend(patch_config, device)
 
     while (
         submap_vertices_idx < len(submap_vertices) - 1

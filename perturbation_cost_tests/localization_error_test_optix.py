@@ -21,7 +21,6 @@ from localization_dfo.io_utils import (
     get_path_vertices_with_submaps,
     load_submap_mesh_to_enu,
 )
-from localization_dfo.mesh_cost import GeometryParams
 from localization_dfo.optix_backend import OptixDepthBackend
 from localization_dfo.pipeline_dfo import (
     build_path_candidates,
@@ -89,22 +88,6 @@ def load_radar_translator_model(weights_path, device):
     model.load_state_dict(state_dict)
     model.eval()
     return model
-
-
-def build_geometry_params(patch_config):
-    return GeometryParams(
-        theta_min=patch_config["theta_min"],
-        theta_max=patch_config["theta_max"],
-        phi_min=patch_config["phi_min"],
-        phi_max=patch_config["phi_max"],
-        dtheta=patch_config["dtheta"],
-        dphi=patch_config["dphi"],
-        width=patch_config["width"],
-        height=patch_config["height"],
-        max_uv_edge_length=patch_config["max_uv_edge_length"],
-        max_depth_jump=patch_config["max_depth_jump"],
-        fill_value=patch_config["fill_value"],
-    )
 
 
 def cauchy_loss(residual, c=0.1):
@@ -360,8 +343,7 @@ def run_sequence(
     loaded_mesh_submap_stamp_us = None
     mesh_vertices_gpu = None
     mesh_triangles_gpu = None
-    geom = build_geometry_params(patch_config)
-    tracer = OptixDepthBackend(geom, device)
+    tracer = OptixDepthBackend(patch_config, device)
 
     while radar_frame_idx < end_frame + 1:
         t0 = perf_counter()

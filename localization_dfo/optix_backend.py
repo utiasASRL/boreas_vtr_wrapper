@@ -3,15 +3,16 @@ import torch
 
 
 class OptixDepthBackend:
-    def __init__(self, geom, device):
+    def __init__(self, patch_config, device):
         self.device = torch.device(device)
         if self.device.type != "cuda":
             raise RuntimeError("The OptiX depth backend requires a CUDA device.")
         if self.device.index is None:
             self.device = torch.device("cuda", torch.cuda.current_device())
-        if (int(geom.height), int(geom.width)) != (61, 61):
+        if (int(patch_config["height"]), int(patch_config["width"])) != (61, 61):
             raise ValueError(
-                f"The radar translator CNN requires 61x61 patches, got {geom.height}x{geom.width}."
+                "The radar translator CNN requires 61x61 patches, got "
+                f"{patch_config['height']}x{patch_config['width']}."
             )
         try:
             import optix_range_tracer
@@ -21,8 +22,8 @@ class OptixDepthBackend:
                 "and build the Stage 3 extension first."
             ) from error
 
-        self.height = int(geom.height)
-        self.width = int(geom.width)
+        self.height = int(patch_config["height"])
+        self.width = int(patch_config["width"])
         self.pose_count = 0
         self.mesh_ready = False
         self.scan_ready = False
@@ -30,10 +31,10 @@ class OptixDepthBackend:
             self.tracer = optix_range_tracer.OptixRangeTracer(
                 width=self.width,
                 height=self.height,
-                theta_min=float(np.rad2deg(geom.theta_min)),
-                theta_max=float(np.rad2deg(geom.theta_max)),
-                phi_min=float(np.rad2deg(geom.phi_min)),
-                phi_max=float(np.rad2deg(geom.phi_max)),
+                theta_min=float(np.rad2deg(patch_config["theta_min"])),
+                theta_max=float(np.rad2deg(patch_config["theta_max"])),
+                phi_min=float(np.rad2deg(patch_config["phi_min"])),
+                phi_max=float(np.rad2deg(patch_config["phi_max"])),
             )
 
     def set_mesh(self, vertices, triangles):
@@ -96,17 +97,7 @@ class OptixDepthBackend:
             raise ValueError(f"{name} must be contiguous.")
 
 
-def _activate_model_output(predictions, activation):
-    if activation == "raw":
-        return predictions
-    if activation == "sigmoid":
-        return torch.sigmoid(predictions)
-    if activation == "softplus":
-        return torch.nn.functional.softplus(predictions)
-    raise ValueError(f"Unknown model output activation: {activation}")
-
-
-def compute_optix_cost(backend, current_transform, observed_radar, model, activation):
+def compute_optix_cost(backend, current_transform, observed_radar, model):
     if observed_radar.ndim != 2 or observed_radar.shape[0] != backend.pose_count:
         raise ValueError(
             f"Observed radar must have shape [B, bins] with B={backend.pose_count}, "
@@ -122,13 +113,12 @@ def compute_optix_cost(backend, current_transform, observed_radar, model, activa
     trace_start = torch.cuda.Event(enable_timing=True)
     trace_end = torch.cuda.Event(enable_timing=True)
     model_end = torch.cuda.Event(enable_timing=True)
-    cost_end = torch.cuda.Event(enable_timing=True)
 
     with torch.no_grad():
         trace_start.record()
         depth = backend.trace(current_transform)
         trace_end.record()
-        predictions = _activate_model_output(model(depth.unsqueeze(1)), activation)
+        predictions = torch.sigmoid(model(depth.unsqueeze(1)))
         if predictions.shape != observed_radar.shape:
             raise RuntimeError(
                 f"Model output shape {tuple(predictions.shape)} does not match "
@@ -137,77 +127,10 @@ def compute_optix_cost(backend, current_transform, observed_radar, model, activa
         model_end.record()
         residual = observed_radar - predictions
         cost_gpu = 0.5 * residual.square().sum()
-        cost_end.record()
         cost = float(cost_gpu.item())
 
     timing = {
-        "optix_trace_time_s": trace_start.elapsed_time(trace_end) / 1000.0,
+        "depth_patch_generation_time_s": trace_start.elapsed_time(trace_end) / 1000.0,
         "model_inference_time_s": trace_end.elapsed_time(model_end) / 1000.0,
-        "cost_compute_time_s": model_end.elapsed_time(cost_end) / 1000.0,
     }
-    return cost, depth, timing
-
-
-def compare_depth_patches(depth_optix, depth_mesh):
-    if tuple(depth_optix.shape) != tuple(depth_mesh.shape):
-        raise ValueError(
-            f"Depth patch shapes differ: OptiX {tuple(depth_optix.shape)} vs "
-            f"torch-mesh {tuple(depth_mesh.shape)}."
-        )
-
-    hit_optix = depth_optix > 0
-    hit_mesh = depth_mesh > 0
-    both_hit = hit_optix & hit_mesh
-    union = hit_optix | hit_mesh
-    total = hit_optix.numel()
-    agreement = (hit_optix == hit_mesh).sum().item() / max(total, 1)
-    union_count = int(union.sum().item())
-    intersection_count = int(both_hit.sum().item())
-
-    metrics = {
-        "total_pixels": total,
-        "optix_hit_count": int(hit_optix.sum().item()),
-        "torch_mesh_hit_count": int(hit_mesh.sum().item()),
-        "hit_mask_agreement_percent": 100.0 * agreement,
-        "hit_mask_iou": intersection_count / union_count if union_count else 1.0,
-        "both_hit_count": intersection_count,
-    }
-    if intersection_count:
-        error = (depth_optix[both_hit] - depth_mesh[both_hit]).abs()
-        metrics.update(
-            mean_absolute_error=float(error.mean().item()),
-            median_absolute_error=float(error.median().item()),
-            percentile_95_absolute_error=float(torch.quantile(error, 0.95).item()),
-            maximum_absolute_error=float(error.max().item()),
-        )
-    else:
-        metrics.update(
-            mean_absolute_error=None,
-            median_absolute_error=None,
-            percentile_95_absolute_error=None,
-            maximum_absolute_error=None,
-        )
-
-    def centroid(mask):
-        indices = torch.nonzero(mask, as_tuple=False)
-        if not len(indices):
-            return None
-        return tuple(float(value) for value in indices[:, 1:].float().mean(dim=0).tolist())
-
-    optix_centroid = centroid(hit_optix)
-    mesh_centroid = centroid(hit_mesh)
-    metrics["optix_hit_centroid_row_col"] = optix_centroid
-    metrics["torch_mesh_hit_centroid_row_col"] = mesh_centroid
-    metrics["shape_consistent"] = True
-    metrics["orientation_appears_consistent"] = (
-        optix_centroid is not None
-        and mesh_centroid is not None
-        and max(abs(a - b) for a, b in zip(optix_centroid, mesh_centroid)) <= 2.0
-    )
-    return metrics
-
-
-def print_comparison_metrics(metrics):
-    print("Depth backend comparison")
-    for key, value in metrics.items():
-        print(f"  {key}: {value}")
+    return cost, timing
