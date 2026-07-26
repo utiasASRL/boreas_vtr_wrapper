@@ -570,6 +570,7 @@ def main():
     parser.add_argument("--experiment-name", required=True)
     parser.add_argument("--map-sequence", required=True)
     parser.add_argument("--loc-sequence", required=True)
+    parser.add_argument("--device", default="cuda")
     parser.add_argument("--radar-start-frame", type=int, default=65)
     parser.add_argument("--radar-end-frame", type=int, default=None)
     parser.add_argument("--random-seed", type=int, default=0)
@@ -610,7 +611,11 @@ def main():
     if boreas_data is None:
         raise RuntimeError("VTRRDATA must be set.")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(args.device)
+    if device.type == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError("CUDA device requested but CUDA is unavailable.")
+    torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cuda.matmul.allow_tf32 = False
     lidar_results_dir = vtr_results / "lidar"
     weights_path = os.path.join(
         boreas_vtr_wrapper_dir,
