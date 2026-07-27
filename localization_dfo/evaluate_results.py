@@ -120,13 +120,13 @@ def write_plots(rows, output_dir):
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate DFO localization result errors.")
-    parser.add_argument("--loc-sequence", required=True)
-    parser.add_argument("--csv", required=True, help="CSV filename under results/<loc-sequence>/")
+    parser.add_argument("--csv", required=True, type=Path, help="Path to a DFO result CSV.")
     args = parser.parse_args()
 
-    results_dir = Path(__file__).resolve().parent / "results" / args.loc_sequence
-    csv_path = results_dir / args.csv
-    output_dir = results_dir / Path(args.csv).stem
+    csv_path = args.csv
+    if not csv_path.is_file():
+        raise FileNotFoundError(f"Result CSV does not exist: {csv_path}")
+    output_dir = csv_path.parent / "evaluate_results"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     rows = load_errors(csv_path)

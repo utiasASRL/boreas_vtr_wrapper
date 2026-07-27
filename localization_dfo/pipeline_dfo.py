@@ -167,24 +167,71 @@ def build_localization_result_row(sequence_id, frame_id, T_init, T_hat, T_gt, hi
     }
 
 
-def initialize_results_csv(csv_path, append=False, overwrite=False):
+def initialize_result_files(csv_path, pose_path, append=False, overwrite=False):
     csv_path.parent.mkdir(parents=True, exist_ok=True)
-    if csv_path.exists():
-        if overwrite:
-            csv_path.unlink()
-        elif not append:
-            raise FileExistsError(
-                f"Results CSV already exists: {csv_path}. Use --append or --overwrite explicitly."
-            )
+    if overwrite:
+        csv_path.unlink(missing_ok=True)
+        pose_path.unlink(missing_ok=True)
+    elif not append and (csv_path.exists() or pose_path.exists()):
+        raise FileExistsError(
+            f"Experiment results already exist in {csv_path.parent}. "
+            "Use --append or --overwrite explicitly."
+        )
+    elif append and csv_path.exists() != pose_path.exists():
+        raise FileNotFoundError(
+            "Cannot append because only one of the CSV and pyboreas result files exists."
+        )
 
     if not csv_path.exists():
         with csv_path.open("w", newline="") as f:
             csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES).writeheader()
+    pose_path.touch(exist_ok=True)
 
 
 def append_localization_result(csv_path, result_row):
     with csv_path.open("a", newline="") as f:
         csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES).writerow(result_row)
+
+
+def build_pyboreas_result_row(radar_frame, reference_lidar_frame, T_radar_enu):
+    T_lidar_radar = (
+        np.linalg.inv(reference_lidar_frame.pose)
+        @ np.linalg.inv(T_radar_enu)
+    )
+    return [
+        radar_frame.timestamp_micro,
+        reference_lidar_frame.timestamp_micro,
+        *T_lidar_radar[:3, :].reshape(-1),
+    ]
+
+
+def load_pyboreas_results(pose_path):
+    rows = {}
+    with pose_path.open() as f:
+        for line in f:
+            values = line.split()
+            if not values:
+                continue
+            if len(values) != 14:
+                raise ValueError(
+                    f"Expected 14 values per pyboreas row in {pose_path}, got {len(values)}."
+                )
+            timestamp = int(values[0])
+            if timestamp in rows:
+                raise ValueError(f"Duplicate radar timestamp in {pose_path}: {timestamp}")
+            rows[timestamp] = values
+    return rows
+
+
+def write_pyboreas_results(pose_path, rows):
+    with pose_path.open("w", newline="") as f:
+        writer = csv.writer(f, delimiter=" ")
+        writer.writerows(rows[timestamp] for timestamp in sorted(rows))
+
+
+def append_pyboreas_result(pose_path, row):
+    with pose_path.open("a", newline="") as f:
+        csv.writer(f, delimiter=" ").writerow(row)
 
 
 def save_cartesian_radar_image(radar_frame, polar, output_path):
@@ -257,6 +304,7 @@ def run_sequence(
     model,
     device,
     results_csv_path,
+    results_pose_path,
     mesh_root,
     random_seed,
     imfil_budget,
@@ -284,9 +332,32 @@ def run_sequence(
     rng = np.random.default_rng(random_seed)
 
     optix_backend = OptixDepthBackend(patch_config, device)
+    pyboreas_rows = load_pyboreas_results(results_pose_path)
+
+    first_radar_frame = loc_seq.radar_frames[0]
+    first_timestamp = first_radar_frame.timestamp_micro
+    if first_timestamp not in pyboreas_rows:
+        T_first_gt = np.linalg.inv(first_radar_frame.pose)
+        first_submap_idx = nearest_submap_idx(
+            T_robot_radar @ T_first_gt,
+            submap_candidates,
+        )
+        first_lidar_frame = submap_candidates[first_submap_idx][1]
+        first_row = build_pyboreas_result_row(
+            first_radar_frame,
+            first_lidar_frame,
+            T_first_gt,
+        )
+        pyboreas_rows[first_timestamp] = [str(value) for value in first_row]
+        append_pyboreas_result(results_pose_path, first_row)
 
     while radar_frame_idx < end_frame + 1:
         radar_frame = loc_seq.get_radar(radar_frame_idx)
+        if radar_frame.timestamp_micro in pyboreas_rows:
+            raise ValueError(
+                f"Radar timestamp already exists in {results_pose_path}: "
+                f"{radar_frame.timestamp_micro}"
+            )
         poses = [
             get_inverse_tf(rad_frame.pose)
             for rad_frame in loc_seq.radar_frames[radar_frame_idx - 1:radar_frame_idx + 2]
@@ -385,7 +456,7 @@ def run_sequence(
         eps_best, _ = extract_best_from_result(result, logger)
         T_hat = left_se3_retract(T=T_init, delta=eps_best)
 
-        image_root = results_csv_path.with_suffix("")
+        image_root = results_csv_path.parent
         if save_labels:
             save_cartesian_radar_image(
                 radar_frame,
@@ -417,11 +488,27 @@ def run_sequence(
             results_csv_path,
             build_localization_result_row(loc_seq.ID, radar_frame.frame, T_init, T_hat, T_gt, logger.history_f),
         )
+        pose_row = build_pyboreas_result_row(radar_frame, lidar_frame, T_hat)
+        pyboreas_rows[radar_frame.timestamp_micro] = [str(value) for value in pose_row]
+        append_pyboreas_result(results_pose_path, pose_row)
         print(f"Saved localization result: {results_csv_path}")
 
         radar_frame.unload_data()
         print("radar frame unloaded!")
         radar_frame_idx += 1
+
+    penultimate_timestamp = loc_seq.radar_frames[-2].timestamp_micro
+    last_radar_frame = loc_seq.radar_frames[-1]
+    if (
+        penultimate_timestamp in pyboreas_rows
+        and last_radar_frame.timestamp_micro not in pyboreas_rows
+    ):
+        last_row = pyboreas_rows[penultimate_timestamp].copy()
+        last_row[0] = str(last_radar_frame.timestamp_micro)
+        pyboreas_rows[last_radar_frame.timestamp_micro] = last_row
+        append_pyboreas_result(results_pose_path, last_row)
+    write_pyboreas_results(results_pose_path, pyboreas_rows)
+    print(f"Saved pyboreas results: {results_pose_path}")
 
 
 def main():
@@ -490,14 +577,21 @@ def main():
 
     map_seq = dataset.get_seq_from_ID(args.map_sequence)
     loc_seq = dataset.get_seq_from_ID(args.loc_sequence)
-    results_csv_path = (
+    experiment_dir = (
         Path(boreas_vtr_wrapper_dir)
         / "localization_dfo"
         / "results"
         / loc_seq.ID
-        / f"{experiment_name}.csv"
+        / experiment_name
     )
-    initialize_results_csv(results_csv_path, append=args.append, overwrite=args.overwrite)
+    results_csv_path = experiment_dir / f"{experiment_name}.csv"
+    results_pose_path = experiment_dir / f"{loc_seq.ID}.txt"
+    initialize_result_files(
+        results_csv_path,
+        results_pose_path,
+        append=args.append,
+        overwrite=args.overwrite,
+    )
     run_sequence(
         map_seq=map_seq,
         loc_seq=loc_seq,
@@ -508,6 +602,7 @@ def main():
         model=model,
         device=device,
         results_csv_path=results_csv_path,
+        results_pose_path=results_pose_path,
         mesh_root=args.mesh_root,
         random_seed=args.random_seed,
         imfil_budget=args.imfil_budget,
