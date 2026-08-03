@@ -213,4 +213,9 @@ for seq in ${SEQUENCES[@]}; do
 done
 ```
 
+## To-do
+- Correctly load initial velocity conditions when starting from start frame != 0
+- Add start frame control to localization
+- Add submap saving to all pipelines
+
 ## [License](./LICENSE)
