@@ -214,8 +214,11 @@ done
 ```
 
 ## To-do
+Some of these need to be implemented in large part in the VTR3 codebase.
+- Fix compilation warnings
 - Correctly load initial velocity conditions when starting from start frame != 0
 - Add start frame control to localization
 - Add submap saving to all pipelines
+- Add proper SE(2) localization for radar-lidar pipeline
 
 ## [License](./LICENSE)
