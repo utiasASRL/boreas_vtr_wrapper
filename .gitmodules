@@ -12,3 +12,7 @@
 [submodule "external/NKSR"]
 	path = external/NKSR
 	url = https://github.com/nv-tlabs/NKSR.git
+[submodule "external/dro"]
+	path = external/dro
+	url = https://github.com/Aleggsdee/dro.git
+	branch = radar-azimuth-odometry

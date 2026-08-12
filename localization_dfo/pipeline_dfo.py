@@ -24,7 +24,7 @@ from localization_dfo.io_utils import (
 from localization_dfo.optix_backend import OptixDepthBackend, compute_optix_cost
 from localization_dfo.optimizer import ObjectiveLogger, extract_best_from_result, run_imfil_direct
 from localization_dfo.radar_translator_cnn import RadarTranslatorCNN
-from localization_dfo.transforms import left_se3_retract, make_delta_T
+from localization_dfo.transforms import left_se3_retract
 
 
 RESULT_FIELDNAMES = [
@@ -50,6 +50,14 @@ RESULT_FIELDNAMES = [
 def load_radar_translator_model(weights_path, device):
     model = RadarTranslatorCNN().to(device)
     checkpoint = torch.load(weights_path, map_location=device)
+    if not isinstance(checkpoint, dict) or "radar_normalization_scale" not in checkpoint:
+        raise ValueError(
+            f"Checkpoint {weights_path} has no radar_normalization_scale metadata. "
+            "Convert the legacy checkpoint before evaluation."
+        )
+    normalization_scale = float(checkpoint["radar_normalization_scale"])
+    if not np.isfinite(normalization_scale) or normalization_scale <= 0:
+        raise ValueError(f"Invalid radar_normalization_scale: {normalization_scale}")
     if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
         state_dict = checkpoint["model_state_dict"]
     elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
@@ -59,6 +67,7 @@ def load_radar_translator_model(weights_path, device):
     if isinstance(state_dict, dict) and any(key.startswith("module.") for key in state_dict):
         state_dict = {key.removeprefix("module."): value for key, value in state_dict.items()}
     model.load_state_dict(state_dict)
+    model.radar_normalization_scale = normalization_scale
     model.eval()
     return model
 
@@ -223,6 +232,104 @@ def load_pyboreas_results(pose_path):
     return rows
 
 
+def load_dro_odometry(path, radar_frames):
+    with np.load(path) as data:
+        required = {
+            "frame_timestamps_us",
+            "reference_poses",
+            "azimuth_timestamps_us",
+            "frame_offsets",
+            "odom_transforms",
+            "frame_transforms",
+            "frame_body_velocities",
+            "velocity_start_us",
+            "velocity_end_us",
+            "odom_transform_convention",
+        }
+        if missing := required.difference(data.files):
+            raise ValueError(f"Missing arrays in {path}: {sorted(missing)}")
+        result = {name: data[name] for name in required}
+
+    frame_times = result["frame_timestamps_us"]
+    reference_poses = result["reference_poses"]
+    azimuth_times = result["azimuth_timestamps_us"]
+    offsets = result["frame_offsets"]
+    transforms = result["odom_transforms"]
+    frame_transforms = result["frame_transforms"]
+    frame_body_velocities = result["frame_body_velocities"]
+    velocity_start_us = result["velocity_start_us"]
+    velocity_end_us = result["velocity_end_us"]
+    if result["odom_transform_convention"].item() != "right":
+        raise ValueError("DRO NPZ does not contain right-side pipeline odometry transforms.")
+    expected_times = np.asarray(
+        [frame.timestamp_micro for frame in radar_frames], dtype=np.int64
+    )
+    if not np.array_equal(frame_times, expected_times):
+        raise ValueError("3DRO and Boreas radar frame timestamps differ.")
+    if reference_poses.shape != (len(frame_times), 4, 4):
+        raise ValueError(f"Invalid 3DRO reference pose shape: {reference_poses.shape}")
+    if frame_transforms.shape != reference_poses.shape:
+        raise ValueError(f"Invalid 3DRO frame transform shape: {frame_transforms.shape}")
+    if frame_body_velocities.shape != (len(frame_times), 2):
+        raise ValueError(f"Invalid 2DRO body velocity shape: {frame_body_velocities.shape}")
+    if velocity_start_us.shape != frame_times.shape or velocity_end_us.shape != frame_times.shape:
+        raise ValueError("Invalid 2DRO velocity validity timestamp shapes.")
+    if offsets.shape != (len(frame_times) + 1,) or offsets[0] != 0:
+        raise ValueError(f"Invalid 3DRO frame offsets: {offsets.shape}")
+    if offsets[-1] != len(azimuth_times) or transforms.shape != (len(azimuth_times), 4, 4):
+        raise ValueError("3DRO azimuth array lengths differ.")
+    expected_start_us = np.asarray(
+        [np.min(azimuth_times[start:end]) for start, end in zip(offsets[:-1], offsets[1:])]
+    )
+    expected_end_us = np.asarray(
+        [np.max(azimuth_times[start:end]) for start, end in zip(offsets[:-1], offsets[1:])]
+    )
+    if not np.array_equal(velocity_start_us, expected_start_us) or not np.array_equal(
+        velocity_end_us, expected_end_us
+    ):
+        raise ValueError("2DRO velocity and radar scan validity timestamps differ.")
+    if not np.allclose(frame_transforms[0], np.eye(4)) or not np.allclose(
+        frame_transforms[1:] @ reference_poses[:-1], reference_poses[1:]
+    ):
+        raise ValueError("3DRO inter-frame transforms do not compose with reference poses.")
+    if (
+        np.any(np.diff(offsets) <= 0)
+        or not np.isfinite(reference_poses).all()
+        or not np.isfinite(transforms).all()
+        or not np.isfinite(frame_transforms).all()
+        or not np.isfinite(frame_body_velocities).all()
+    ):
+        raise ValueError("3DRO odometry contains invalid offsets or poses.")
+    return result
+
+
+def get_gt_azimuth_odometry(loc_seq, frame_idx, radar_frame):
+    poses = [
+        get_inverse_tf(frame.pose)
+        for frame in loc_seq.radar_frames[frame_idx - 1:frame_idx + 2]
+    ]
+    times = [
+        frame.timestamp_micro
+        for frame in loc_seq.radar_frames[frame_idx - 1:frame_idx + 2]
+    ]
+    azimuth_poses = interpolate_poses(
+        poses, times, radar_frame.timestamps.flatten().tolist()
+    )
+    return np.asarray(azimuth_poses) @ radar_frame.pose
+
+
+def print_dro_odometry_error(dro_transforms, reference_pose, gt_transforms):
+    dro_left_transforms = reference_pose @ dro_transforms @ np.linalg.inv(reference_pose)
+    errors = dro_left_transforms @ np.linalg.inv(gt_transforms)
+    translation = np.linalg.norm(errors[:, :3, 3], axis=1)
+    rotation_deg = np.rad2deg(R.from_matrix(errors[:, :3, :3]).magnitude())
+    print(
+        "3DRO azimuth error: "
+        f"translation p50/p95/max [m] = {np.percentile(translation, [50, 95, 100])}, "
+        f"rotation p50/p95/max [deg] = {np.percentile(rotation_deg, [50, 95, 100])}"
+    )
+
+
 def write_pyboreas_results(pose_path, rows):
     with pose_path.open("w", newline="") as f:
         writer = csv.writer(f, delimiter=" ")
@@ -306,10 +413,11 @@ def run_sequence(
     results_csv_path,
     results_pose_path,
     mesh_root,
-    random_seed,
     imfil_budget,
     save_predictions,
     save_labels,
+    dro_odometry_path,
+    validate_dro_odometry,
 ):
     print(f"Map SequenceID: {map_seq.ID}")
     print(f"Localization SequenceID: {loc_seq.ID}")
@@ -329,10 +437,10 @@ def run_sequence(
     loaded_mesh_submap_stamp_us = None
     mesh_vertices_gpu = None
     mesh_triangles_gpu = None
-    rng = np.random.default_rng(random_seed)
-
     optix_backend = OptixDepthBackend(patch_config, device)
     pyboreas_rows = load_pyboreas_results(results_pose_path)
+    dro_odometry = load_dro_odometry(dro_odometry_path, loc_seq.radar_frames)
+    previous_localized_pose = None
 
     first_radar_frame = loc_seq.radar_frames[0]
     first_timestamp = first_radar_frame.timestamp_micro
@@ -358,26 +466,27 @@ def run_sequence(
                 f"Radar timestamp already exists in {results_pose_path}: "
                 f"{radar_frame.timestamp_micro}"
             )
-        poses = [
-            get_inverse_tf(rad_frame.pose)
-            for rad_frame in loc_seq.radar_frames[radar_frame_idx - 1:radar_frame_idx + 2]
-        ]
-        times = [
-            rad_frame.timestamp_micro
-            for rad_frame in loc_seq.radar_frames[radar_frame_idx - 1:radar_frame_idx + 2]
-        ]
-        azimuth_poses = interpolate_poses(poses, times, radar_frame.timestamps.flatten().tolist())
         radar_azimuths = radar_frame.azimuths.flatten()
+        start, end = dro_odometry["frame_offsets"][radar_frame_idx:radar_frame_idx + 2]
+        odom_times = dro_odometry["azimuth_timestamps_us"][start:end]
+        if not np.array_equal(odom_times, radar_frame.timestamps.flatten()):
+            raise ValueError(
+                f"3DRO azimuth timestamps differ for radar frame {radar_frame.frame}."
+            )
+        odom_transforms = dro_odometry["odom_transforms"][start:end]
+        if validate_dro_odometry:
+            print_dro_odometry_error(
+                odom_transforms,
+                dro_odometry["reference_poses"][radar_frame_idx],
+                get_gt_azimuth_odometry(loc_seq, radar_frame_idx, radar_frame),
+            )
 
-        T_enu_radar = radar_frame.pose
-        odom_transforms = np.array([T_enu_radar @ T_i for T_i in azimuth_poses])
-
-        T_offset = make_delta_T(
-            translation=rng.uniform(-0.2, 0.2, size=3),
-            rpy_deg=rng.uniform(-2.0, 2.0, size=3),
-        )
-        T_gt = np.linalg.inv(T_enu_radar)
-        T_init = T_offset @ T_gt
+        T_gt = np.linalg.inv(radar_frame.pose)
+        if previous_localized_pose is None:
+            T_init = T_gt.copy()
+        else:
+            frame_delta = dro_odometry["frame_transforms"][radar_frame_idx]
+            T_init = frame_delta @ previous_localized_pose
 
         # submap selection with T_gt
         # T_robot_enu = T_robot_radar @ T_gt
@@ -406,10 +515,14 @@ def run_sequence(
             optix_backend.set_mesh(mesh_vertices_gpu, mesh_triangles_gpu)
             loaded_mesh_submap_stamp_us = submap_stamp_us
 
-        shifted_polar = correct_offsets(radar_frame, radar_frame_idx, loc_seq)
+        shifted_polar = correct_offsets(
+            radar_frame,
+            dro_odometry["frame_body_velocities"][radar_frame_idx],
+            loc_seq.calib.radar_offset,
+        )
         filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)
 
-        radar_polar_cropped = filtered_polar[:, :2736] / 0.5613
+        radar_polar_cropped = filtered_polar[:, :2736] / model.radar_normalization_scale
         if len(radar_polar_cropped) != len(odom_transforms):
             raise ValueError(
                 f"Radar rows and odometry pose counts differ: "
@@ -421,7 +534,6 @@ def run_sequence(
             dtype=torch.float32,
         ).contiguous()
         optix_backend.set_scan(odom_transforms, radar_azimuths)
-
         cost_call_timings = []
 
         def cost_fn(eps):
@@ -455,12 +567,13 @@ def run_sequence(
         optimization_time_s = perf_counter() - t_opt
         eps_best, _ = extract_best_from_result(result, logger)
         T_hat = left_se3_retract(T=T_init, delta=eps_best)
+        previous_localized_pose = T_hat
 
         image_root = results_csv_path.parent
         if save_labels:
             save_cartesian_radar_image(
                 radar_frame,
-                filtered_polar / 0.5613,
+                filtered_polar / model.radar_normalization_scale,
                 image_root / "labels" / f"{radar_frame.frame}.png",
             )
         if save_predictions:
@@ -519,10 +632,11 @@ def main():
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--radar-start-frame", type=int, default=65)
     parser.add_argument("--radar-end-frame", type=int, default=None)
-    parser.add_argument("--random-seed", type=int, default=0)
     parser.add_argument("--imfil-budget", type=int, default=120)
     parser.add_argument("--save-predictions", action="store_true")
     parser.add_argument("--save-labels", action="store_true")
+    parser.add_argument("--dro-odometry", type=Path)
+    parser.add_argument("--validate-dro-odometry", action="store_true")
     output_mode = parser.add_mutually_exclusive_group()
     output_mode.add_argument("--append", action="store_true")
     output_mode.add_argument("--overwrite", action="store_true")
@@ -549,6 +663,21 @@ def main():
         raise RuntimeError("VTRROOT must be set.")
     if boreas_data is None:
         raise RuntimeError("VTRRDATA must be set.")
+
+    dro_odometry_path = args.dro_odometry or (
+        Path(boreas_vtr_wrapper_dir)
+        / "external"
+        / "dro"
+        / "output"
+        / args.loc_sequence
+        / "odometry_result"
+        / "azimuth_odometry.npz"
+    )
+    if not dro_odometry_path.is_file():
+        raise FileNotFoundError(
+            f"DRO odometry not found: {dro_odometry_path}. Run external/dro/odom_3d.py "
+            "for this localization sequence or pass --dro-odometry."
+        )
 
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -604,10 +733,11 @@ def main():
         results_csv_path=results_csv_path,
         results_pose_path=results_pose_path,
         mesh_root=args.mesh_root,
-        random_seed=args.random_seed,
         imfil_budget=args.imfil_budget,
         save_predictions=args.save_predictions,
         save_labels=args.save_labels,
+        dro_odometry_path=dro_odometry_path,
+        validate_dro_odometry=args.validate_dro_odometry,
     )
 
 

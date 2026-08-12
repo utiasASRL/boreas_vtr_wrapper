@@ -4,7 +4,6 @@ from time import perf_counter
 import numpy as np
 import torch
 from pylgmath import Transformation
-from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d, shift
 from vtr_pose_graph.graph_iterators import TemporalIterator
 from vtr_pose_graph import graph_utils as g_utils
@@ -86,29 +85,19 @@ def build_patch_config(
     }
 
 
-def correct_offsets(radar_frame, radar_frame_idx, seq):
-    prev_radar_frame = seq.radar_frames[radar_frame_idx - 1]
-    next_radar_frame = seq.radar_frames[radar_frame_idx + 1]
-    body_rates = [prev_radar_frame.body_rate, radar_frame.body_rate, next_radar_frame.body_rate]
-    times_us = [
-        prev_radar_frame.timestamp_micro,
-        radar_frame.timestamp_micro,
-        next_radar_frame.timestamp_micro,
-    ]
-
-    azimuth_timestamps = radar_frame.timestamps.flatten()
-    f = interp1d(times_us, body_rates, axis=0, kind="quadratic")
-    azimuth_body_rates = f(azimuth_timestamps)
+def correct_offsets(radar_frame, body_velocity, radar_offset):
+    body_velocity = np.asarray(body_velocity)
+    if body_velocity.shape != (2,) or not np.isfinite(body_velocity).all():
+        raise ValueError(f"Radar body velocity must be a finite [vx, vy], got {body_velocity}.")
 
     shifted_polar = shift(
         radar_frame.polar,
-        shift=(0, seq.calib.radar_offset / radar_frame.resolution),
+        shift=(0, radar_offset / radar_frame.resolution),
         order=3,
         mode="nearest",
     )
 
-    vx = -azimuth_body_rates[:, 0]
-    vy = -azimuth_body_rates[:, 1]
+    vx, vy = -body_velocity
     u = vx * np.cos(radar_frame.azimuths) + vy * np.sin(radar_frame.azimuths)
     # delta_r_d = seq.calib.radar_doppler_beta * u
     delta_r_d = 0.05024 * u
