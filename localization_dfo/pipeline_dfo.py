@@ -45,7 +45,39 @@ RESULT_FIELDNAMES = [
     "initial_cost",
     "final_cost",
     "iterations",
+    "candidate_x_m",
+    "candidate_y_m",
+    "candidate_z_m",
+    "candidate_roll_deg",
+    "candidate_pitch_deg",
+    "candidate_yaw_deg",
+    "candidate_cost",
+    "optimizer_eps_x_m",
+    "optimizer_eps_y_m",
+    "optimizer_eps_z_m",
+    "optimizer_eps_rx_deg",
+    "optimizer_eps_ry_deg",
+    "optimizer_eps_rz_deg",
+    "observed_active_azimuth_count",
+    "observed_active_azimuth_fraction",
+    "initial_prediction_active_azimuth_count",
+    "initial_prediction_active_fraction",
+    "candidate_prediction_active_azimuth_count",
+    "candidate_prediction_active_fraction",
+    "candidate_prediction_active_ratio",
+    "candidate_prediction_active_drop",
+    "candidate_missing_observed_azimuth_count",
+    "candidate_missing_observed_azimuth_fraction",
+    "pose_gating_enabled",
+    "localization_state",
+    "optimizer_rejected",
+    "rejection_reasons",
+    "consecutive_rejections",
 ]
+
+TRANSLATION_JUMP_M = 0.20
+ROTATION_JUMP_DEG = 0.50
+
 
 def load_radar_translator_model(weights_path, device):
     model = RadarTranslatorCNN().to(device)
@@ -149,11 +181,97 @@ def advance_submap_idx(T_query_enu, candidates, submap_idx):
     return submap_idx
 
 
-def build_localization_result_row(sequence_id, frame_id, T_init, T_hat, T_gt, history):
+def pose_gate_diagnostics(observed, initial_prediction, candidate_prediction, eps_best):
+    if observed.shape != initial_prediction.shape or observed.shape != candidate_prediction.shape:
+        raise ValueError("Observed, initial, and candidate radar arrays must have the same shape.")
+
+    observed_active = np.count_nonzero(observed > 0, axis=1) >= 3
+    initial_active = np.count_nonzero(initial_prediction > 0.05, axis=1) >= 3
+    candidate_active = np.count_nonzero(candidate_prediction > 0.05, axis=1) >= 3
+    azimuth_count = len(observed_active)
+    observed_count = int(observed_active.sum())
+    initial_count = int(initial_active.sum())
+    candidate_count = int(candidate_active.sum())
+    missed_count = int(np.count_nonzero(observed_active & ~candidate_active))
+    observed_fraction = observed_count / azimuth_count
+    initial_fraction = initial_count / azimuth_count
+    candidate_fraction = candidate_count / azimuth_count
+    missing_fraction = missed_count / observed_count if observed_count else 0.0
+
+    prediction_reasons = []
+    if (
+        candidate_fraction < 0.75 * initial_fraction
+        and initial_fraction - candidate_fraction > 0.20
+    ):
+        prediction_reasons.append("candidate_prediction_coverage_collapse")
+    if observed_count and missing_fraction > 0.25:
+        prediction_reasons.append("candidate_observed_azimuth_mismatch")
+
+    jump_reasons = []
+    for axis, value in zip("xyz", np.abs(eps_best[:3])):
+        if value > TRANSLATION_JUMP_M:
+            jump_reasons.append(f"translation_jump_{axis}")
+    for axis, value in zip(("rx", "ry", "rz"), np.abs(np.rad2deg(eps_best[3:]))):
+        if value > ROTATION_JUMP_DEG:
+            jump_reasons.append(f"rotation_jump_{axis}")
+
+    return {
+        "observed_active_azimuth_count": observed_count,
+        "observed_active_azimuth_fraction": observed_fraction,
+        "initial_prediction_active_azimuth_count": initial_count,
+        "initial_prediction_active_fraction": initial_fraction,
+        "candidate_prediction_active_azimuth_count": candidate_count,
+        "candidate_prediction_active_fraction": candidate_fraction,
+        "candidate_prediction_active_ratio": (
+            candidate_fraction / initial_fraction if initial_fraction else float("nan")
+        ),
+        "candidate_prediction_active_drop": initial_fraction - candidate_fraction,
+        "candidate_missing_observed_azimuth_count": missed_count,
+        "candidate_missing_observed_azimuth_fraction": missing_fraction,
+    }, jump_reasons, prediction_reasons
+
+
+def apply_pose_gate(
+    state,
+    consecutive_rejections,
+    healthy_recovery_accepts,
+    jump_reasons,
+    prediction_reasons,
+):
+    reasons = prediction_reasons + (jump_reasons if state == "tracking" else [])
+    rejected = bool(reasons)
+    next_state = state
+    if rejected:
+        consecutive_rejections += 1
+        healthy_recovery_accepts = 0
+        if state == "tracking" and consecutive_rejections >= 3:
+            next_state = "recovery"
+    else:
+        consecutive_rejections = 0
+        if state == "recovery":
+            healthy_recovery_accepts = healthy_recovery_accepts + 1 if not jump_reasons else 0
+            if healthy_recovery_accepts >= 3:
+                next_state = "tracking"
+                healthy_recovery_accepts = 0
+    return rejected, reasons, next_state, consecutive_rejections, healthy_recovery_accepts
+
+
+def build_localization_result_row(
+    sequence_id,
+    frame_id,
+    T_init,
+    T_hat,
+    T_candidate,
+    T_gt,
+    history,
+    eps_best,
+    candidate_cost,
+    gate_fields,
+):
     init_xyz, init_rpy_deg = pose_error_xyz_rpy(T_init, T_gt)
     final_xyz, final_rpy_deg = pose_error_xyz_rpy(T_hat, T_gt)
+    candidate_xyz, candidate_rpy_deg = pose_error_xyz_rpy(T_candidate, T_gt)
     has_history = len(history) > 0
-    idx = int(np.argmin(history)) if has_history else 0
 
     return {
         "sequence_id": sequence_id,
@@ -171,8 +289,22 @@ def build_localization_result_row(sequence_id, frame_id, T_init, T_hat, T_gt, hi
         "final_pitch_deg": float(final_rpy_deg[1]),
         "final_yaw_deg": float(final_rpy_deg[2]),
         "initial_cost": float(history[0]) if has_history else float("nan"),
-        "final_cost": float(history[idx]) if has_history else float("nan"),
+        "final_cost": float(history[0]) if gate_fields["optimizer_rejected"] else candidate_cost,
         "iterations": len(history),
+        "candidate_x_m": float(candidate_xyz[0]),
+        "candidate_y_m": float(candidate_xyz[1]),
+        "candidate_z_m": float(candidate_xyz[2]),
+        "candidate_roll_deg": float(candidate_rpy_deg[0]),
+        "candidate_pitch_deg": float(candidate_rpy_deg[1]),
+        "candidate_yaw_deg": float(candidate_rpy_deg[2]),
+        "candidate_cost": candidate_cost,
+        "optimizer_eps_x_m": float(eps_best[0]),
+        "optimizer_eps_y_m": float(eps_best[1]),
+        "optimizer_eps_z_m": float(eps_best[2]),
+        "optimizer_eps_rx_deg": float(np.rad2deg(eps_best[3])),
+        "optimizer_eps_ry_deg": float(np.rad2deg(eps_best[4])),
+        "optimizer_eps_rz_deg": float(np.rad2deg(eps_best[5])),
+        **gate_fields,
     }
 
 
@@ -190,6 +322,14 @@ def initialize_result_files(csv_path, pose_path, append=False, overwrite=False):
         raise FileNotFoundError(
             "Cannot append because only one of the CSV and pyboreas result files exists."
         )
+
+    if append and csv_path.exists():
+        with csv_path.open(newline="") as f:
+            header = next(csv.reader(f), None)
+        if header != RESULT_FIELDNAMES:
+            raise ValueError(
+                f"Cannot append to {csv_path}: its columns do not match the current result schema."
+            )
 
     if not csv_path.exists():
         with csv_path.open("w", newline="") as f:
@@ -418,6 +558,7 @@ def run_sequence(
     save_labels,
     dro_odometry_path,
     validate_dro_odometry,
+    pose_gating,
 ):
     print(f"Map SequenceID: {map_seq.ID}")
     print(f"Localization SequenceID: {loc_seq.ID}")
@@ -441,6 +582,9 @@ def run_sequence(
     pyboreas_rows = load_pyboreas_results(results_pose_path)
     dro_odometry = load_dro_odometry(dro_odometry_path, loc_seq.radar_frames)
     previous_localized_pose = None
+    localization_state = "tracking"
+    consecutive_rejections = 0
+    healthy_recovery_accepts = 0
 
     first_radar_frame = loc_seq.radar_frames[0]
     first_timestamp = first_radar_frame.timestamp_micro
@@ -565,8 +709,62 @@ def run_sequence(
         t_opt = perf_counter()
         result, _ = run_imfil_direct("imfil", logger, eps0, bounds, imfil_budget)
         optimization_time_s = perf_counter() - t_opt
-        eps_best, _ = extract_best_from_result(result, logger)
-        T_hat = left_se3_retract(T=T_init, delta=eps_best)
+        eps_best, candidate_cost = extract_best_from_result(result, logger)
+        T_candidate = left_se3_retract(T=T_init, delta=eps_best)
+        T_hat = T_candidate
+        candidate_prediction = None
+        accepted_prediction = None
+        decision_state = localization_state
+        gate_fields = {
+            "observed_active_azimuth_count": "",
+            "observed_active_azimuth_fraction": "",
+            "initial_prediction_active_azimuth_count": "",
+            "initial_prediction_active_fraction": "",
+            "candidate_prediction_active_azimuth_count": "",
+            "candidate_prediction_active_fraction": "",
+            "candidate_prediction_active_ratio": "",
+            "candidate_prediction_active_drop": "",
+            "candidate_missing_observed_azimuth_count": "",
+            "candidate_missing_observed_azimuth_fraction": "",
+            "pose_gating_enabled": pose_gating,
+            "localization_state": decision_state,
+            "optimizer_rejected": False,
+            "rejection_reasons": "",
+            "consecutive_rejections": 0,
+        }
+        if pose_gating:
+            initial_prediction = predict_radar_at_pose(T_init, model, optix_backend)
+            candidate_prediction = predict_radar_at_pose(T_candidate, model, optix_backend)
+            diagnostics, jump_reasons, prediction_reasons = pose_gate_diagnostics(
+                radar_polar_cropped,
+                initial_prediction,
+                candidate_prediction,
+                eps_best,
+            )
+            (
+                rejected,
+                rejection_reasons,
+                localization_state,
+                consecutive_rejections,
+                healthy_recovery_accepts,
+            ) = apply_pose_gate(
+                decision_state,
+                consecutive_rejections,
+                healthy_recovery_accepts,
+                jump_reasons,
+                prediction_reasons,
+            )
+            if rejected:
+                T_hat = T_init
+                accepted_prediction = initial_prediction
+            else:
+                accepted_prediction = candidate_prediction
+            gate_fields.update(
+                diagnostics,
+                optimizer_rejected=rejected,
+                rejection_reasons=";".join(rejection_reasons),
+                consecutive_rejections=consecutive_rejections,
+            )
         previous_localized_pose = T_hat
 
         image_root = results_csv_path.parent
@@ -577,11 +775,9 @@ def run_sequence(
                 image_root / "labels" / f"{radar_frame.frame}.png",
             )
         if save_predictions:
-            predictions = predict_radar_at_pose(
-                T=T_hat,
-                model=model,
-                optix_backend=optix_backend,
-            )
+            predictions = accepted_prediction
+            if predictions is None:
+                predictions = predict_radar_at_pose(T_hat, model, optix_backend)
             if predictions.shape != radar_polar_cropped.shape:
                 raise RuntimeError(
                     f"Prediction shape {predictions.shape} does not match "
@@ -599,7 +795,18 @@ def run_sequence(
         print_localization_error_report(T_init, T_hat, T_gt)
         append_localization_result(
             results_csv_path,
-            build_localization_result_row(loc_seq.ID, radar_frame.frame, T_init, T_hat, T_gt, logger.history_f),
+            build_localization_result_row(
+                loc_seq.ID,
+                radar_frame.frame,
+                T_init,
+                T_hat,
+                T_candidate,
+                T_gt,
+                logger.history_f,
+                eps_best,
+                candidate_cost,
+                gate_fields,
+            ),
         )
         pose_row = build_pyboreas_result_row(radar_frame, lidar_frame, T_hat)
         pyboreas_rows[radar_frame.timestamp_micro] = [str(value) for value in pose_row]
@@ -637,6 +844,7 @@ def main():
     parser.add_argument("--save-labels", action="store_true")
     parser.add_argument("--dro-odometry", type=Path)
     parser.add_argument("--validate-dro-odometry", action="store_true")
+    parser.add_argument("--pose-gating", action="store_true")
     output_mode = parser.add_mutually_exclusive_group()
     output_mode.add_argument("--append", action="store_true")
     output_mode.add_argument("--overwrite", action="store_true")
@@ -738,6 +946,7 @@ def main():
         save_labels=args.save_labels,
         dro_odometry_path=dro_odometry_path,
         validate_dro_odometry=args.validate_dro_odometry,
+        pose_gating=args.pose_gating,
     )
 
 
