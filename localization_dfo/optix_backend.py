@@ -110,24 +110,25 @@ def compute_optix_cost(backend, current_transform, observed_radar, model):
     ):
         raise ValueError("Observed radar must be contiguous CUDA float32 on the backend device.")
 
-    trace_start = torch.cuda.Event(enable_timing=True)
-    trace_end = torch.cuda.Event(enable_timing=True)
-    model_end = torch.cuda.Event(enable_timing=True)
+    with torch.cuda.device(backend.device):
+        trace_start = torch.cuda.Event(enable_timing=True)
+        trace_end = torch.cuda.Event(enable_timing=True)
+        model_end = torch.cuda.Event(enable_timing=True)
 
-    with torch.no_grad():
-        trace_start.record()
-        depth = backend.trace(current_transform)
-        trace_end.record()
-        predictions = torch.sigmoid(model(depth.unsqueeze(1)))
-        if predictions.shape != observed_radar.shape:
-            raise RuntimeError(
-                f"Model output shape {tuple(predictions.shape)} does not match "
-                f"observed radar {tuple(observed_radar.shape)}."
-            )
-        model_end.record()
-        residual = observed_radar - predictions
-        cost_gpu = 0.5 * residual.square().sum()
-        cost = float(cost_gpu.item())
+        with torch.no_grad():
+            trace_start.record()
+            depth = backend.trace(current_transform)
+            trace_end.record()
+            predictions = torch.sigmoid(model(depth.unsqueeze(1)))
+            if predictions.shape != observed_radar.shape:
+                raise RuntimeError(
+                    f"Model output shape {tuple(predictions.shape)} does not match "
+                    f"observed radar {tuple(observed_radar.shape)}."
+                )
+            model_end.record()
+            residual = observed_radar - predictions
+            cost_gpu = 0.5 * residual.square().sum()
+            cost = float(cost_gpu.item())
 
     timing = {
         "depth_patch_generation_time_s": trace_start.elapsed_time(trace_end) / 1000.0,

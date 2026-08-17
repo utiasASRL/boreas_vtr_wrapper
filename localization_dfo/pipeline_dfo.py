@@ -58,16 +58,15 @@ RESULT_FIELDNAMES = [
     "optimizer_eps_rx_deg",
     "optimizer_eps_ry_deg",
     "optimizer_eps_rz_deg",
-    "observed_active_azimuth_count",
-    "observed_active_azimuth_fraction",
+    "observed_total_evidence",
     "initial_prediction_active_azimuth_count",
     "initial_prediction_active_fraction",
     "candidate_prediction_active_azimuth_count",
     "candidate_prediction_active_fraction",
     "candidate_prediction_active_ratio",
     "candidate_prediction_active_drop",
-    "candidate_missing_observed_azimuth_count",
-    "candidate_missing_observed_azimuth_fraction",
+    "candidate_missing_observed_evidence",
+    "candidate_missing_observed_evidence_fraction",
     "pose_gating_enabled",
     "localization_state",
     "optimizer_rejected",
@@ -77,6 +76,7 @@ RESULT_FIELDNAMES = [
 
 TRANSLATION_JUMP_M = 0.20
 ROTATION_JUMP_DEG = 0.50
+MISSING_OBSERVED_EVIDENCE_FRACTION = 0.60
 
 
 def load_radar_translator_model(weights_path, device):
@@ -185,18 +185,17 @@ def pose_gate_diagnostics(observed, initial_prediction, candidate_prediction, ep
     if observed.shape != initial_prediction.shape or observed.shape != candidate_prediction.shape:
         raise ValueError("Observed, initial, and candidate radar arrays must have the same shape.")
 
-    observed_active = np.count_nonzero(observed > 0, axis=1) >= 3
     initial_active = np.count_nonzero(initial_prediction > 0.05, axis=1) >= 3
     candidate_active = np.count_nonzero(candidate_prediction > 0.05, axis=1) >= 3
-    azimuth_count = len(observed_active)
-    observed_count = int(observed_active.sum())
+    azimuth_count = len(candidate_active)
     initial_count = int(initial_active.sum())
     candidate_count = int(candidate_active.sum())
-    missed_count = int(np.count_nonzero(observed_active & ~candidate_active))
-    observed_fraction = observed_count / azimuth_count
+    observed_evidence = observed.sum(axis=1)
+    total_evidence = float(observed_evidence.sum())
+    missing_evidence = float(observed_evidence[~candidate_active].sum())
+    missing_evidence_fraction = missing_evidence / total_evidence if total_evidence else 0.0
     initial_fraction = initial_count / azimuth_count
     candidate_fraction = candidate_count / azimuth_count
-    missing_fraction = missed_count / observed_count if observed_count else 0.0
 
     prediction_reasons = []
     if (
@@ -204,7 +203,7 @@ def pose_gate_diagnostics(observed, initial_prediction, candidate_prediction, ep
         and initial_fraction - candidate_fraction > 0.20
     ):
         prediction_reasons.append("candidate_prediction_coverage_collapse")
-    if observed_count and missing_fraction > 0.25:
+    if missing_evidence_fraction > MISSING_OBSERVED_EVIDENCE_FRACTION:
         prediction_reasons.append("candidate_observed_azimuth_mismatch")
 
     jump_reasons = []
@@ -216,8 +215,7 @@ def pose_gate_diagnostics(observed, initial_prediction, candidate_prediction, ep
             jump_reasons.append(f"rotation_jump_{axis}")
 
     return {
-        "observed_active_azimuth_count": observed_count,
-        "observed_active_azimuth_fraction": observed_fraction,
+        "observed_total_evidence": total_evidence,
         "initial_prediction_active_azimuth_count": initial_count,
         "initial_prediction_active_fraction": initial_fraction,
         "candidate_prediction_active_azimuth_count": candidate_count,
@@ -226,8 +224,8 @@ def pose_gate_diagnostics(observed, initial_prediction, candidate_prediction, ep
             candidate_fraction / initial_fraction if initial_fraction else float("nan")
         ),
         "candidate_prediction_active_drop": initial_fraction - candidate_fraction,
-        "candidate_missing_observed_azimuth_count": missed_count,
-        "candidate_missing_observed_azimuth_fraction": missing_fraction,
+        "candidate_missing_observed_evidence": missing_evidence,
+        "candidate_missing_observed_evidence_fraction": missing_evidence_fraction,
     }, jump_reasons, prediction_reasons
 
 
@@ -716,16 +714,15 @@ def run_sequence(
         accepted_prediction = None
         decision_state = localization_state
         gate_fields = {
-            "observed_active_azimuth_count": "",
-            "observed_active_azimuth_fraction": "",
+            "observed_total_evidence": "",
             "initial_prediction_active_azimuth_count": "",
             "initial_prediction_active_fraction": "",
             "candidate_prediction_active_azimuth_count": "",
             "candidate_prediction_active_fraction": "",
             "candidate_prediction_active_ratio": "",
             "candidate_prediction_active_drop": "",
-            "candidate_missing_observed_azimuth_count": "",
-            "candidate_missing_observed_azimuth_fraction": "",
+            "candidate_missing_observed_evidence": "",
+            "candidate_missing_observed_evidence_fraction": "",
             "pose_gating_enabled": pose_gating,
             "localization_state": decision_state,
             "optimizer_rejected": False,
