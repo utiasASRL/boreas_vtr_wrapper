@@ -23,10 +23,10 @@ class ObjectiveLogger:
         return np.asarray(self.fs)
 
 
-def run_imfil_direct(method, objective, x0, bounds, budget):
+def run_imfil_direct(method, objective, x0, bounds, budget, options=None):
     from skquant.opt import minimize
 
-    out = minimize(objective, x0, bounds, budget, method=method)
+    out = minimize(objective, x0, bounds, budget, method=method, options=options)
     if isinstance(out, tuple):
         return out[0], out[1] if len(out) > 1 else None
     return out, None
