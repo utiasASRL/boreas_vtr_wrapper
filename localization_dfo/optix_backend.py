@@ -115,7 +115,7 @@ def compute_optix_cost(backend, current_transform, observed_radar, model):
         trace_end = torch.cuda.Event(enable_timing=True)
         model_end = torch.cuda.Event(enable_timing=True)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             trace_start.record()
             depth = backend.trace(current_transform)
             trace_end.record()

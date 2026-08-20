@@ -723,6 +723,7 @@ def run_sequence(
 
     while radar_frame_idx < end_frame + 1:
         iteration_start = perf_counter()
+        frame_setup_start = perf_counter()
         radar_frame = loc_seq.get_radar(radar_frame_idx)
         if radar_frame.timestamp_micro in pyboreas_rows:
             raise ValueError(
@@ -759,7 +760,9 @@ def run_sequence(
 
         submap_idx = nearest_submap_idx(T_robot_enu, submap_candidates, submap_idx)
         curr_submap, lidar_frame, _ = submap_candidates[submap_idx]
+        frame_setup_time_s = perf_counter() - frame_setup_start
 
+        mesh_update_start = perf_counter()
         submap_stamp_us = curr_submap.stamp // 1000
         if loaded_mesh_submap_stamp_us != submap_stamp_us:
             mesh_vertices_gpu, mesh_triangles_gpu, _ = load_submap_mesh_to_enu( # vertices in enu frame
@@ -772,7 +775,9 @@ def run_sequence(
             )
             optix_backend.set_mesh(mesh_vertices_gpu, mesh_triangles_gpu)
             loaded_mesh_submap_stamp_us = submap_stamp_us
+        mesh_update_time_s = perf_counter() - mesh_update_start
 
+        radar_preprocessing_start = perf_counter()
         shifted_polar = correct_offsets(
             radar_frame,
             dro_odometry["frame_body_velocities"][radar_frame_idx],
@@ -792,6 +797,7 @@ def run_sequence(
             dtype=torch.float32,
         ).contiguous()
         optix_backend.set_scan(odom_transforms, radar_azimuths)
+        radar_preprocessing_time_s = perf_counter() - radar_preprocessing_start
         if not model_warmed_up:
             with torch.inference_mode():
                 model(optix_backend.trace(T_init).unsqueeze(1))
@@ -888,6 +894,7 @@ def run_sequence(
             )
         previous_localized_pose = T_hat
 
+        image_save_start = perf_counter()
         image_root = results_csv_path.parent
         if save_labels:
             save_cartesian_radar_image(
@@ -911,7 +918,13 @@ def run_sequence(
                 padded_predictions,
                 image_root / "predictions" / f"{radar_frame.frame}.png",
             )
+        image_save_time_s = perf_counter() - image_save_start
 
+        print("Frame timing")
+        print(f"  frame setup [s]:        {frame_setup_time_s:.6f}")
+        print(f"  mesh update [s]:        {mesh_update_time_s:.6f}")
+        print(f"  radar preprocessing [s]: {radar_preprocessing_time_s:.6f}")
+        print(f"  image save [s]:         {image_save_time_s:.6f}")
         print_dfo_timing_report(optimization_time_s, logger, cost_call_timings)
         print_localization_error_report(T_init, T_hat, T_gt)
         append_localization_result(
