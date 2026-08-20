@@ -53,6 +53,8 @@ RESULT_FIELDNAMES = [
     "candidate_pitch_deg",
     "candidate_yaw_deg",
     "candidate_cost",
+    "candidate_radar_cost",
+    "candidate_prior_penalty",
     "optimizer_eps_x_m",
     "optimizer_eps_y_m",
     "optimizer_eps_z_m",
@@ -77,8 +79,6 @@ RESULT_FIELDNAMES = [
     "model_inference_time_s",
     "depth_patch_generation_time_s",
     "peak_cuda_memory_mb",
-    "optimization_azimuth_count",
-    "full_scan_candidate_cost",
 ]
 
 TRANSLATION_JUMP_M = 0.20
@@ -90,15 +90,6 @@ COARSE_TRANSLATION_TARGET_M = 0.05
 COARSE_ROTATION_TARGET_DEG = 0.5
 FINE_TRANSLATION_TARGET_M = 0.01
 FINE_ROTATION_TARGET_DEG = 0.05
-
-
-def evidence_stratified_azimuth_indices(observed, fraction):
-    if not 0.0 < fraction <= 1.0:
-        raise ValueError("Azimuth fraction must be in (0, 1].")
-    evidence = np.asarray(observed).sum(axis=1)
-    count = max(1, round(len(evidence) * fraction))
-    sectors = np.array_split(np.arange(len(evidence)), count)
-    return np.asarray([sector[np.argmax(evidence[sector])] for sector in sectors])
 
 
 def load_radar_translator_model(weights_path, device):
@@ -207,6 +198,17 @@ def nearest_submap_idx(T_query_enu, candidates, center_idx=None, radius=SUBMAP_S
         if abs(best_offset) < radius or radius >= max_radius:
             return best_idx
         radius = min(radius * 2, max_radius)
+
+
+def optimizer_bounds(localization_state):
+    bounds = np.array(
+        [[-0.3, 0.3]] * 3 + [[-3.0, 3.0]] * 3,
+        dtype=float,
+    )
+    if localization_state == "recovery":
+        bounds[:2] = [-0.5, 0.5]
+    bounds[3:] = np.deg2rad(bounds[3:])
+    return bounds
 
 
 def calculate_imfil_scales(bounds):
@@ -415,6 +417,56 @@ def load_pyboreas_results(pose_path):
     return rows
 
 
+def load_resume_state(csv_path, pose_rows, map_seq, loc_seq, radar_start_frame):
+    last_result = None
+    with csv_path.open(newline="") as f:
+        for last_result in csv.DictReader(f):
+            pass
+    if last_result is None:
+        return None, "tracking", 0, 0
+
+    previous_frame = loc_seq.radar_frames[radar_start_frame - 1]
+    previous_timestamp = previous_frame.timestamp_micro
+    if int(last_result["frame_id"]) != previous_timestamp or previous_timestamp not in pose_rows:
+        raise ValueError(
+            f"Resume frame {radar_start_frame} does not follow the last saved frame "
+            f"{last_result['frame_id']}."
+        )
+
+    pose_row = pose_rows[previous_timestamp]
+    lidar_timestamp = int(pose_row[1])
+    lidar_frame = next(
+        (frame for frame in map_seq.lidar_frames if frame.timestamp_micro == lidar_timestamp),
+        None,
+    )
+    if lidar_frame is None:
+        raise ValueError(f"Saved reference lidar frame not found: {lidar_timestamp}")
+    T_lidar_radar = np.eye(4)
+    T_lidar_radar[:3] = np.asarray(pose_row[2:], dtype=float).reshape(3, 4)
+    previous_pose = np.linalg.inv(lidar_frame.pose @ T_lidar_radar)
+
+    state = last_result["localization_state"]
+    consecutive_rejections = int(last_result["consecutive_rejections"])
+    rejected = last_result["optimizer_rejected"].lower() == "true"
+    jump = any(
+        abs(float(last_result[name])) > limit
+        for name, limit in (
+            ("optimizer_eps_x_m", TRANSLATION_JUMP_M),
+            ("optimizer_eps_y_m", TRANSLATION_JUMP_M),
+            ("optimizer_eps_z_m", TRANSLATION_JUMP_M),
+            ("optimizer_eps_rx_deg", ROTATION_JUMP_DEG),
+            ("optimizer_eps_ry_deg", ROTATION_JUMP_DEG),
+            ("optimizer_eps_rz_deg", ROTATION_JUMP_DEG),
+        )
+    )
+    if state == "tracking" and consecutive_rejections >= 3:
+        state = "recovery"
+    elif state == "recovery" and not rejected and not jump:
+        state = "tracking"
+    print(f"Resuming after radar frame {radar_start_frame - 1} in {state} state")
+    return previous_pose, state, consecutive_rejections, 0
+
+
 def load_dro_odometry(path, radar_frames):
     with np.load(path) as data:
         required = {
@@ -593,6 +645,8 @@ def run_sequence(
     patch_config,
     model,
     device,
+    lambda_prior,
+    sigma_prior,
     results_csv_path,
     results_pose_path,
     mesh_root,
@@ -602,7 +656,6 @@ def run_sequence(
     dro_odometry_path,
     validate_dro_odometry,
     pose_gating,
-    azimuth_fraction,
     imfil_function_delta,
     imfil_stencil_delta,
 ):
@@ -627,20 +680,22 @@ def run_sequence(
     optix_backend = OptixDepthBackend(patch_config, device)
     pyboreas_rows = load_pyboreas_results(results_pose_path)
     dro_odometry = load_dro_odometry(dro_odometry_path, loc_seq.radar_frames)
-    previous_localized_pose = None
-    localization_state = "tracking"
-    consecutive_rejections = 0
-    healthy_recovery_accepts = 0
+    (
+        previous_localized_pose,
+        localization_state,
+        consecutive_rejections,
+        healthy_recovery_accepts,
+    ) = load_resume_state(
+        results_csv_path,
+        pyboreas_rows,
+        map_seq,
+        loc_seq,
+        radar_start_frame,
+    )
     model_warmed_up = False
     steady_iteration_time_sum = 0.0
 
-    bounds = np.array(
-        [[-0.3, 0.3]] * 3 + [[-3.0, 3.0]] * 3,
-        dtype=float,
-    )
-    bounds[3:] = np.deg2rad(bounds[3:])
-    scale_start, scale_depth = calculate_imfil_scales(bounds)
-    imfil_options = {"scale_start": scale_start, "scale_depth": scale_depth}
+    imfil_options = {}
     for name, value in (
         ("function_delta", imfil_function_delta),
         ("stencil_delta", imfil_stencil_delta),
@@ -731,18 +786,12 @@ def run_sequence(
                 f"Radar rows and odometry pose counts differ: "
                 f"{len(radar_polar_cropped)} != {len(odom_transforms)}."
             )
-        azimuth_indices = evidence_stratified_azimuth_indices(
-            radar_polar_cropped, azimuth_fraction
-        )
-        optimization_radar = radar_polar_cropped[azimuth_indices]
         radar_polar_cropped_gpu = torch.as_tensor(
-            optimization_radar,
+            radar_polar_cropped,
             device=device,
             dtype=torch.float32,
         ).contiguous()
-        optix_backend.set_scan(
-            odom_transforms[azimuth_indices], radar_azimuths[azimuth_indices]
-        )
+        optix_backend.set_scan(odom_transforms, radar_azimuths)
         if not model_warmed_up:
             with torch.inference_mode():
                 model(optix_backend.trace(T_init).unsqueeze(1))
@@ -757,14 +806,22 @@ def run_sequence(
                 radar_polar_cropped_gpu,
                 model,
             )
+
+            prior_cost = np.sum((eps / sigma_prior)**2)
+            total_cost = cost + lambda_prior * prior_cost
             cost_call_timings.append(timing)
-            return cost
+            return total_cost
 
         logger = ObjectiveLogger(cost_fn)
         eps0 = np.zeros(6)
 
         torch.cuda.reset_peak_memory_stats(device)
         t_opt = perf_counter()
+        bounds = optimizer_bounds(localization_state)
+        scale_start, scale_depth = calculate_imfil_scales(bounds)
+        imfil_options.update(
+            scale_start=scale_start, scale_depth=scale_depth
+        )
         result, _ = run_imfil_direct(
             "imfil", logger, eps0, bounds, imfil_budget, imfil_options or None
         )
@@ -772,17 +829,10 @@ def run_sequence(
         optimization_time_s = perf_counter() - t_opt
         peak_cuda_memory_mb = torch.cuda.max_memory_allocated(device) / 1024**2
         eps_best, candidate_cost = extract_best_from_result(result, logger)
+        candidate_prior_penalty = float(
+            lambda_prior * np.sum((eps_best / sigma_prior) ** 2)
+        )
         T_candidate = left_se3_retract(T=T_init, delta=eps_best)
-        if len(azimuth_indices) == len(radar_azimuths):
-            full_scan_candidate_cost = candidate_cost
-        else:
-            optix_backend.set_scan(odom_transforms, radar_azimuths)
-            full_observed_gpu = torch.as_tensor(
-                radar_polar_cropped, device=device, dtype=torch.float32
-            ).contiguous()
-            full_scan_candidate_cost = compute_optix_cost(
-                optix_backend, T_candidate, full_observed_gpu, model
-            )[0]
         T_hat = T_candidate
         candidate_prediction = None
         accepted_prediction = None
@@ -886,8 +936,8 @@ def run_sequence(
                         timing["depth_patch_generation_time_s"] for timing in cost_call_timings
                     ),
                     "peak_cuda_memory_mb": peak_cuda_memory_mb,
-                    "optimization_azimuth_count": len(azimuth_indices),
-                    "full_scan_candidate_cost": full_scan_candidate_cost,
+                    "candidate_radar_cost": candidate_cost - candidate_prior_penalty,
+                    "candidate_prior_penalty": candidate_prior_penalty,
                 },
             ),
         )
@@ -942,7 +992,6 @@ def main():
     parser.add_argument("--radar-start-frame", type=int, default=65)
     parser.add_argument("--radar-end-frame", type=int, default=None)
     parser.add_argument("--imfil-budget", type=int, default=60)
-    parser.add_argument("--azimuth-fraction", type=float, default=1.0)
     parser.add_argument("--imfil-function-delta", type=float)
     parser.add_argument("--imfil-stencil-delta", type=float)
     parser.add_argument("--save-predictions", action="store_true")
@@ -962,8 +1011,6 @@ def main():
 
     if args.imfil_budget < 1:
         raise ValueError("--imfil-budget must be positive.")
-    if not 0.0 < args.azimuth_fraction <= 1.0:
-        raise ValueError("--azimuth-fraction must be in (0, 1].")
     for name in ("imfil_function_delta", "imfil_stencil_delta"):
         value = getattr(args, name)
         if value is not None and value <= 0:
@@ -1024,6 +1071,17 @@ def main():
     )
     patch_config["fov_deg"] = 6.0
 
+    lambda_prior = 10
+    sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 0.5, 0.3, 0.15, 0.25, 0.25, 0.25
+    sigma_prior = np.array([
+        sigma_x,
+        sigma_y,
+        sigma_z,
+        np.deg2rad(sigma_roll),
+        np.deg2rad(sigma_pitch),
+        np.deg2rad(sigma_yaw)
+    ])
+
     map_seq = dataset.get_seq_from_ID(args.map_sequence)
     loc_seq = dataset.get_seq_from_ID(args.loc_sequence)
     experiment_dir = (
@@ -1050,6 +1108,8 @@ def main():
         patch_config=patch_config,
         model=model,
         device=device,
+        lambda_prior=lambda_prior,
+        sigma_prior=sigma_prior,
         results_csv_path=results_csv_path,
         results_pose_path=results_pose_path,
         mesh_root=args.mesh_root,
@@ -1059,7 +1119,6 @@ def main():
         dro_odometry_path=dro_odometry_path,
         validate_dro_odometry=args.validate_dro_odometry,
         pose_gating=args.pose_gating,
-        azimuth_fraction=args.azimuth_fraction,
         imfil_function_delta=args.imfil_function_delta,
         imfil_stencil_delta=args.imfil_stencil_delta,
     )
