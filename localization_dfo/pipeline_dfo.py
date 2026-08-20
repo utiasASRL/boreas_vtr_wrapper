@@ -85,6 +85,7 @@ TRANSLATION_JUMP_M = 0.20
 ROTATION_JUMP_DEG = 0.50
 MISSING_OBSERVED_EVIDENCE_FRACTION = 0.60
 SUBMAP_SEARCH_RADIUS = 5
+SUBMAP_SEARCH_MAX_RADIUS = 20
 COARSE_TRANSLATION_TARGET_M = 0.05
 COARSE_ROTATION_TARGET_DEG = 0.5
 FINE_TRANSLATION_TARGET_M = 0.01
@@ -187,24 +188,25 @@ def build_path_candidates(map_seq, path_submap_pairs, T_lidar_robot):
 
 def nearest_submap_idx(T_query_enu, candidates, center_idx=None, radius=SUBMAP_SEARCH_RADIUS):
     if center_idx is None:
-        start, stop = 0, len(candidates)
-    else:
-        start = max(0, center_idx - radius)
-        stop = min(len(candidates), center_idx + radius + 1)
-
-    while True:
-        best_idx = min(
-            range(start, stop),
+        return min(
+            range(len(candidates)),
             key=lambda idx: submap_distance(T_query_enu, candidates[idx][2]),
         )
-        at_expandable_boundary = (best_idx == start and start > 0) or (
-            best_idx == stop - 1 and stop < len(candidates)
+
+    max_radius = min(SUBMAP_SEARCH_MAX_RADIUS, len(candidates) // 2)
+    radius = min(radius, max_radius)
+    while True:
+        offsets = {
+            (center_idx + offset) % len(candidates): offset
+            for offset in range(-radius, radius + 1)
+        }
+        best_idx, best_offset = min(
+            offsets.items(),
+            key=lambda item: submap_distance(T_query_enu, candidates[item[0]][2]),
         )
-        if center_idx is None or not at_expandable_boundary:
+        if abs(best_offset) < radius or radius >= max_radius:
             return best_idx
-        radius *= 2
-        start = max(0, center_idx - radius)
-        stop = min(len(candidates), center_idx + radius + 1)
+        radius = min(radius * 2, max_radius)
 
 
 def calculate_imfil_scales(bounds):

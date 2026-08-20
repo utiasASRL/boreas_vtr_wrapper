@@ -13,16 +13,25 @@ class PipelineHelpersTest(unittest.TestCase):
         )
         self.assertEqual(calculate_imfil_scales(bounds), (4, 7))
 
-    def test_nearest_submap_expands_window_at_boundary(self):
-        candidates = [(None, None, idx) for idx in range(30)]
+    def test_nearest_submap_circular_window_and_expansion(self):
+        candidates = [(None, None, idx) for idx in range(100)]
+
+        def nearest(center_idx, target):
+            with patch(
+                "localization_dfo.pipeline_dfo.submap_distance",
+                side_effect=lambda _query, candidate: abs(candidate - target),
+            ):
+                return nearest_submap_idx(None, candidates, center_idx=center_idx)
+
         with patch(
             "localization_dfo.pipeline_dfo.submap_distance",
-            side_effect=lambda _query, candidate: abs(candidate - 17),
+            side_effect=lambda _query, candidate: abs(candidate - 90),
         ):
-            self.assertEqual(nearest_submap_idx(None, candidates), 17)
-            self.assertEqual(
-                nearest_submap_idx(None, candidates, center_idx=10, radius=5), 17
-            )
+            self.assertEqual(nearest_submap_idx(None, candidates), 90)
+
+        self.assertEqual(nearest(99, 2), 2)
+        self.assertEqual(nearest(25, 42), 42)
+        self.assertEqual(nearest(50, 90), 70)
 
 
 if __name__ == "__main__":
