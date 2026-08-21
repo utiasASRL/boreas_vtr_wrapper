@@ -1,4 +1,5 @@
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import csv
 import math
 import os
@@ -721,23 +722,62 @@ def run_sequence(
         pyboreas_rows[first_timestamp] = [str(value) for value in first_row]
         append_pyboreas_result(results_pose_path, first_row)
 
+    def preprocess_radar_frame(frame_idx):
+        start_time = perf_counter()
+        frame = loc_seq.get_radar(frame_idx)
+        azimuths = frame.azimuths.flatten()
+        start, end = dro_odometry["frame_offsets"][frame_idx:frame_idx + 2]
+        odom_times = dro_odometry["azimuth_timestamps_us"][start:end]
+        if not np.array_equal(odom_times, frame.timestamps.flatten()):
+            raise ValueError(f"3DRO azimuth timestamps differ for radar frame {frame.frame}.")
+        transforms = dro_odometry["odom_transforms"][start:end]
+        shifted = correct_offsets(
+            frame,
+            dro_odometry["frame_body_velocities"][frame_idx],
+            loc_seq.calib.radar_offset,
+        )
+        filtered = cen_filter_2d(
+            shifted,
+            sigma_gauss=15.0,
+            z_q=2.5,
+            noise_scale=0.5,
+            output_width=2736,
+        )
+        observed = filtered / model.radar_normalization_scale
+        if len(observed) != len(transforms):
+            raise ValueError(
+                f"Radar rows and odometry pose counts differ: "
+                f"{len(observed)} != {len(transforms)}."
+            )
+        return frame, azimuths, transforms, filtered, observed, perf_counter() - start_time
+
+    preprocessing_executor = ThreadPoolExecutor(max_workers=1)
+    preprocessing_future = preprocessing_executor.submit(
+        preprocess_radar_frame, radar_start_frame
+    )
     while radar_frame_idx < end_frame + 1:
         iteration_start = perf_counter()
+        prefetch_wait_start = perf_counter()
+        (
+            radar_frame,
+            radar_azimuths,
+            odom_transforms,
+            filtered_polar,
+            radar_polar_cropped,
+            radar_preprocessing_time_s,
+        ) = preprocessing_future.result()
+        prefetch_wait_time_s = perf_counter() - prefetch_wait_start
+        if radar_frame_idx < end_frame:
+            preprocessing_future = preprocessing_executor.submit(
+                preprocess_radar_frame, radar_frame_idx + 1
+            )
+
         frame_setup_start = perf_counter()
-        radar_frame = loc_seq.get_radar(radar_frame_idx)
         if radar_frame.timestamp_micro in pyboreas_rows:
             raise ValueError(
                 f"Radar timestamp already exists in {results_pose_path}: "
                 f"{radar_frame.timestamp_micro}"
             )
-        radar_azimuths = radar_frame.azimuths.flatten()
-        start, end = dro_odometry["frame_offsets"][radar_frame_idx:radar_frame_idx + 2]
-        odom_times = dro_odometry["azimuth_timestamps_us"][start:end]
-        if not np.array_equal(odom_times, radar_frame.timestamps.flatten()):
-            raise ValueError(
-                f"3DRO azimuth timestamps differ for radar frame {radar_frame.frame}."
-            )
-        odom_transforms = dro_odometry["odom_transforms"][start:end]
         if validate_dro_odometry:
             print_dro_odometry_error(
                 odom_transforms,
@@ -777,27 +817,14 @@ def run_sequence(
             loaded_mesh_submap_stamp_us = submap_stamp_us
         mesh_update_time_s = perf_counter() - mesh_update_start
 
-        radar_preprocessing_start = perf_counter()
-        shifted_polar = correct_offsets(
-            radar_frame,
-            dro_odometry["frame_body_velocities"][radar_frame_idx],
-            loc_seq.calib.radar_offset,
-        )
-        filtered_polar = cen_filter_2d(shifted_polar, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5)
-
-        radar_polar_cropped = filtered_polar[:, :2736] / model.radar_normalization_scale
-        if len(radar_polar_cropped) != len(odom_transforms):
-            raise ValueError(
-                f"Radar rows and odometry pose counts differ: "
-                f"{len(radar_polar_cropped)} != {len(odom_transforms)}."
-            )
+        radar_gpu_setup_start = perf_counter()
         radar_polar_cropped_gpu = torch.as_tensor(
             radar_polar_cropped,
             device=device,
             dtype=torch.float32,
         ).contiguous()
         optix_backend.set_scan(odom_transforms, radar_azimuths)
-        radar_preprocessing_time_s = perf_counter() - radar_preprocessing_start
+        radar_preprocessing_time_s += perf_counter() - radar_gpu_setup_start
         if not model_warmed_up:
             with torch.inference_mode():
                 model(optix_backend.trace(T_init).unsqueeze(1))
@@ -924,6 +951,7 @@ def run_sequence(
         print(f"  frame setup [s]:        {frame_setup_time_s:.6f}")
         print(f"  mesh update [s]:        {mesh_update_time_s:.6f}")
         print(f"  radar preprocessing [s]: {radar_preprocessing_time_s:.6f}")
+        print(f"  preprocessing wait [s]: {prefetch_wait_time_s:.6f}")
         print(f"  image save [s]:         {image_save_time_s:.6f}")
         print_dfo_timing_report(optimization_time_s, logger, cost_call_timings)
         print_localization_error_report(T_init, T_hat, T_gt)
@@ -981,6 +1009,8 @@ def run_sequence(
                 f"time left: {time_left_minutes:.3f}min"
             )
         radar_frame_idx += 1
+
+    preprocessing_executor.shutdown()
 
     penultimate_timestamp = loc_seq.radar_frames[-2].timestamp_micro
     last_radar_frame = loc_seq.radar_frames[-1]

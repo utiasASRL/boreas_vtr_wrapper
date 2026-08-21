@@ -115,10 +115,28 @@ def correct_offsets(radar_frame, body_velocity, radar_offset):
     return corrected
 
 
-def cen_filter_2d(polar_image, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5):
+def cen_filter_2d(
+    polar_image,
+    sigma_gauss=15.0,
+    z_q=2.5,
+    noise_scale=0.5,
+    output_width=None,
+):
     mean_val = np.mean(polar_image, axis=1, keepdims=True)
     q = polar_image - mean_val
-    p = gaussian_filter1d(q, sigma=sigma_gauss, axis=1, mode="reflect")
+    if output_width is None:
+        output_width = q.shape[1]
+    elif (
+        not isinstance(output_width, (int, np.integer))
+        or not 0 < output_width <= q.shape[1]
+    ):
+        raise ValueError(f"output_width must be in [1, {q.shape[1]}], got {output_width}.")
+
+    filter_radius = int(4.0 * sigma_gauss + 0.5)
+    filter_input_width = min(output_width + filter_radius, q.shape[1])
+    p = gaussian_filter1d(
+        q[:, :filter_input_width], sigma=sigma_gauss, axis=1, mode="reflect"
+    )[:, :output_width]
 
     neg_mask = q < 0
     count = np.sum(neg_mask, axis=1, keepdims=True)
@@ -129,6 +147,7 @@ def cen_filter_2d(polar_image, sigma_gauss=15.0, z_q=2.5, noise_scale=0.5):
     sigma_q[count == 0] = 0.034
 
     threshold = z_q * sigma_q
+    q = q[:, :output_width]
 
     eps = 1e-8
     pow_p = (p / (sigma_q + eps)) ** 2
