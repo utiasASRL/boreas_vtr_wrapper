@@ -646,7 +646,8 @@ def run_sequence(
     patch_config,
     model,
     device,
-    lambda_prior,
+    lambda_prior_tracking,
+    lambda_prior_recovery,
     sigma_prior,
     results_csv_path,
     results_pose_path,
@@ -831,6 +832,11 @@ def run_sequence(
             torch.cuda.synchronize(device)
             model_warmed_up = True
         cost_call_timings = []
+        lambda_prior = (
+            lambda_prior_recovery
+            if localization_state == "recovery"
+            else lambda_prior_tracking
+        )
 
         def cost_fn(eps):
             cost, timing = compute_optix_cost(
@@ -1114,8 +1120,9 @@ def main():
     )
     patch_config["fov_deg"] = 6.0
 
-    lambda_prior = 10
-    sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 0.5, 0.3, 0.15, 0.25, 0.25, 0.25
+    lambda_prior_tracking = 10
+    lambda_prior_recovery = 2.5
+    sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 0.25, 0.25, 0.085, 0.17, 0.27, 0.045
     sigma_prior = np.array([
         sigma_x,
         sigma_y,
@@ -1151,7 +1158,8 @@ def main():
         patch_config=patch_config,
         model=model,
         device=device,
-        lambda_prior=lambda_prior,
+        lambda_prior_tracking=lambda_prior_tracking,
+        lambda_prior_recovery=lambda_prior_recovery,
         sigma_prior=sigma_prior,
         results_csv_path=results_csv_path,
         results_pose_path=results_pose_path,
