@@ -87,8 +87,8 @@ ROTATION_JUMP_DEG = 0.50
 MISSING_OBSERVED_EVIDENCE_FRACTION = 0.60
 SUBMAP_SEARCH_RADIUS = 5
 SUBMAP_SEARCH_MAX_RADIUS = 20
-COARSE_TRANSLATION_TARGET_M = 0.05
-COARSE_ROTATION_TARGET_DEG = 0.5
+COARSE_TRANSLATION_TARGET_M = 1.0
+COARSE_ROTATION_TARGET_DEG = 3.0
 FINE_TRANSLATION_TARGET_M = 0.01
 FINE_ROTATION_TARGET_DEG = 0.05
 
@@ -202,12 +202,25 @@ def nearest_submap_idx(T_query_enu, candidates, center_idx=None, radius=SUBMAP_S
 
 
 def optimizer_bounds(localization_state):
+    # bounds = np.array(
+    #     [[-0.3, 0.3]] * 3 + [[-3.0, 3.0]] * 3,
+    #     dtype=float,
+    # )
+    # if localization_state == "recovery":
+    #     bounds[:1] = [-1.0, 1.0]
+    # bounds[3:] = np.deg2rad(bounds[3:])
+
     bounds = np.array(
-        [[-0.3, 0.3]] * 3 + [[-3.0, 3.0]] * 3,
+        [
+            [-1.0, 1.0],
+            [-1.0, 1.0],
+            [-1.0, 1.0],
+            [-3.0, 3.0],
+            [-3.0, 3.0],
+            [-3.0, 3.0],
+        ],
         dtype=float,
     )
-    if localization_state == "recovery":
-        bounds[:2] = [-0.5, 0.5]
     bounds[3:] = np.deg2rad(bounds[3:])
     return bounds
 
@@ -294,7 +307,7 @@ def apply_pose_gate(
         consecutive_rejections = 0
         if state == "recovery":
             healthy_recovery_accepts = healthy_recovery_accepts + 1 if not jump_reasons else 0
-            if healthy_recovery_accepts >= 3:
+            if healthy_recovery_accepts >= 2:
                 next_state = "tracking"
                 healthy_recovery_accepts = 0
     return rejected, reasons, next_state, consecutive_rejections, healthy_recovery_accepts
@@ -1102,7 +1115,8 @@ def main():
     lidar_results_dir = vtr_results / "lidar"
     weights_path = os.path.join(
         boreas_vtr_wrapper_dir,
-        "model_dev/route_weights/1-suburb/best_total.pth",
+        # "model_dev/route_weights/1-suburb/best_total.pth",
+        "model_dev/route_weights/1-farm/best_total.pth",
     )
     model = load_radar_translator_model(weights_path, device)
     model = torch.compile(model)
@@ -1120,9 +1134,12 @@ def main():
     )
     patch_config["fov_deg"] = 6.0
 
-    lambda_prior_tracking = 10
-    lambda_prior_recovery = 2.5
-    sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 0.25, 0.25, 0.085, 0.17, 0.27, 0.045
+    lambda_prior_tracking = 2.5
+    lambda_prior_recovery = 1.0
+    # lambda_prior_tracking = 0
+    # lambda_prior_recovery = 0
+    # sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 1.0, 1.0, 0.3, 1.25, 1.25, 0.3
+    sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 1000.0, 1000.0, 0.2, 3.00, 3.00, 0.1
     sigma_prior = np.array([
         sigma_x,
         sigma_y,
