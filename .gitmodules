@@ -16,3 +16,7 @@
 	path = external/dro
 	url = https://github.com/Aleggsdee/dro.git
 	branch = radar-azimuth-odometry
+[submodule "external/wheel_odometry"]
+	path = external/wheel_odometry
+	url = https://github.com/Aleggsdee/wheel_odometry.git
+	branch = radar-azimuth-odometry
