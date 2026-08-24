@@ -1059,11 +1059,23 @@ def run_sequence(
     print(f"Saved pyboreas results: {results_pose_path}")
 
 
+def resolve_dro_odometry_paths(wrapper_dir, sequence_ids, override=None):
+    sequence_ids = list(dict.fromkeys(sequence_ids))
+    if override and len(sequence_ids) != 1:
+        raise ValueError("--dro-odometry can only be used with one --loc-sequence.")
+    output_root = Path(wrapper_dir) / "external" / "wheel_odometry" / "output"
+    return sequence_ids, {
+        sequence_id: override
+        or output_root / sequence_id / "odometry_result" / "azimuth_odometry.npz"
+        for sequence_id in sequence_ids
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run DFO radar-lidar localization.")
     parser.add_argument("--experiment-name", required=True)
     parser.add_argument("--map-sequence", required=True)
-    parser.add_argument("--loc-sequence", required=True)
+    parser.add_argument("--loc-sequence", nargs="+", required=True)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--radar-start-frame", type=int, default=0)
     parser.add_argument("--radar-end-frame", type=int, default=None)
@@ -1106,21 +1118,15 @@ def main():
     if boreas_data is None:
         raise RuntimeError("VTRRDATA must be set.")
 
-    dro_odometry_path = args.dro_odometry or (
-        Path(boreas_vtr_wrapper_dir)
-        / "external"
-        # / "dro"
-        / "wheel_odometry"
-        / "output"
-        / args.loc_sequence
-        / "odometry_result"
-        / "azimuth_odometry.npz"
+    loc_sequence_ids, dro_odometry_paths = resolve_dro_odometry_paths(
+        boreas_vtr_wrapper_dir, args.loc_sequence, args.dro_odometry
     )
-    if not dro_odometry_path.is_file():
-        raise FileNotFoundError(
-            f"DRO odometry not found: {dro_odometry_path}. Run external/dro/odom_3d.py "
-            "for this localization sequence or pass --dro-odometry."
-        )
+    for sequence_id, path in dro_odometry_paths.items():
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Odometry not found for {sequence_id}: {path}. Run wheel_odometry.py "
+                "for this localization sequence or pass --dro-odometry."
+            )
 
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
@@ -1137,7 +1143,7 @@ def main():
     model = torch.compile(model)
     dataset = BoreasDataset(
         boreas_data,
-        [[sequence_id] for sequence_id in dict.fromkeys((args.map_sequence, args.loc_sequence))],
+        [[sequence_id] for sequence_id in dict.fromkeys((args.map_sequence, *loc_sequence_ids))],
     )
 
     patch_config = build_patch_config(
@@ -1166,46 +1172,47 @@ def main():
     ])
 
     map_seq = dataset.get_seq_from_ID(args.map_sequence)
-    loc_seq = dataset.get_seq_from_ID(args.loc_sequence)
-    experiment_dir = (
-        Path(boreas_vtr_wrapper_dir)
-        / "localization_dfo"
-        / "results"
-        / loc_seq.ID
-        / experiment_name
-    )
-    results_csv_path = experiment_dir / f"{experiment_name}.csv"
-    results_pose_path = experiment_dir / f"{loc_seq.ID}.txt"
-    initialize_result_files(
-        results_csv_path,
-        results_pose_path,
-        append=args.append,
-        overwrite=args.overwrite,
-    )
-    run_sequence(
-        map_seq=map_seq,
-        loc_seq=loc_seq,
-        lidar_results_dir=lidar_results_dir,
-        radar_start_frame=args.radar_start_frame,
-        radar_end_frame=args.radar_end_frame,
-        patch_config=patch_config,
-        model=model,
-        device=device,
-        lambda_prior_tracking=lambda_prior_tracking,
-        lambda_prior_recovery=lambda_prior_recovery,
-        sigma_prior=sigma_prior,
-        results_csv_path=results_csv_path,
-        results_pose_path=results_pose_path,
-        mesh_root=args.mesh_root,
-        imfil_budget=args.imfil_budget,
-        save_predictions=args.save_predictions,
-        save_labels=args.save_labels,
-        dro_odometry_path=dro_odometry_path,
-        validate_dro_odometry=args.validate_dro_odometry,
-        pose_gating=args.pose_gating,
-        imfil_function_delta=args.imfil_function_delta,
-        imfil_stencil_delta=args.imfil_stencil_delta,
-    )
+    for sequence_id in loc_sequence_ids:
+        loc_seq = dataset.get_seq_from_ID(sequence_id)
+        experiment_dir = (
+            Path(boreas_vtr_wrapper_dir)
+            / "localization_dfo"
+            / "results"
+            / loc_seq.ID
+            / experiment_name
+        )
+        results_csv_path = experiment_dir / f"{experiment_name}.csv"
+        results_pose_path = experiment_dir / f"{loc_seq.ID}.txt"
+        initialize_result_files(
+            results_csv_path,
+            results_pose_path,
+            append=args.append,
+            overwrite=args.overwrite,
+        )
+        run_sequence(
+            map_seq=map_seq,
+            loc_seq=loc_seq,
+            lidar_results_dir=lidar_results_dir,
+            radar_start_frame=args.radar_start_frame,
+            radar_end_frame=args.radar_end_frame,
+            patch_config=patch_config,
+            model=model,
+            device=device,
+            lambda_prior_tracking=lambda_prior_tracking,
+            lambda_prior_recovery=lambda_prior_recovery,
+            sigma_prior=sigma_prior,
+            results_csv_path=results_csv_path,
+            results_pose_path=results_pose_path,
+            mesh_root=args.mesh_root,
+            imfil_budget=args.imfil_budget,
+            save_predictions=args.save_predictions,
+            save_labels=args.save_labels,
+            dro_odometry_path=dro_odometry_paths[sequence_id],
+            validate_dro_odometry=args.validate_dro_odometry,
+            pose_gating=args.pose_gating,
+            imfil_function_delta=args.imfil_function_delta,
+            imfil_stencil_delta=args.imfil_stencil_delta,
+        )
 
 
 if __name__ == "__main__":
