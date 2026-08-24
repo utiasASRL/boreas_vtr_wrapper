@@ -210,6 +210,8 @@ def optimizer_bounds(localization_state):
     #     bounds[:1] = [-1.0, 1.0]
     # bounds[3:] = np.deg2rad(bounds[3:])
 
+
+    # wide
     bounds = np.array(
         [
             [-1.0, 1.0],
@@ -221,6 +223,18 @@ def optimizer_bounds(localization_state):
         ],
         dtype=float,
     )
+
+    # bounds = np.array(
+    #         [
+    #             [-0.3, 0.3],
+    #             [-0.3, 0.3],
+    #             [-0.3, 0.3],
+    #             [-3.0, 3.0],
+    #             [-3.0, 3.0],
+    #             [-3.0, 3.0],
+    #         ],
+    #         dtype=float,
+    #     )
     bounds[3:] = np.deg2rad(bounds[3:])
     return bounds
 
@@ -1051,14 +1065,14 @@ def main():
     parser.add_argument("--map-sequence", required=True)
     parser.add_argument("--loc-sequence", required=True)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--radar-start-frame", type=int, default=65)
+    parser.add_argument("--radar-start-frame", type=int, default=0)
     parser.add_argument("--radar-end-frame", type=int, default=None)
     parser.add_argument("--imfil-budget", type=int, default=60)
     parser.add_argument("--imfil-function-delta", type=float)
     parser.add_argument("--imfil-stencil-delta", type=float)
     parser.add_argument("--save-predictions", action="store_true")
     parser.add_argument("--save-labels", action="store_true")
-    parser.add_argument("--dro-odometry", type=Path)
+    parser.add_argument("--dro-odometry", type=Path) # TODO change this to wheel_odometry!
     parser.add_argument("--validate-dro-odometry", action="store_true")
     parser.add_argument("--pose-gating", action="store_true")
     output_mode = parser.add_mutually_exclusive_group()
@@ -1095,7 +1109,8 @@ def main():
     dro_odometry_path = args.dro_odometry or (
         Path(boreas_vtr_wrapper_dir)
         / "external"
-        / "dro"
+        # / "dro"
+        / "wheel_odometry"
         / "output"
         / args.loc_sequence
         / "odometry_result"
@@ -1139,7 +1154,8 @@ def main():
     # lambda_prior_tracking = 0
     # lambda_prior_recovery = 0
     # sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 1.0, 1.0, 0.3, 1.25, 1.25, 0.3
-    sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 1000.0, 1000.0, 0.2, 3.00, 3.00, 0.1
+    sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 1000.0, 1000.0, 0.3, 3.0, 3.0, 0.1
+    
     sigma_prior = np.array([
         sigma_x,
         sigma_y,
