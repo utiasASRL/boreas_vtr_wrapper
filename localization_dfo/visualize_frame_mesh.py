@@ -22,7 +22,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Inspect a localization submap in a GT radar frame."
     )
-    parser.add_argument("--sequence", required=True)
+    parser.add_argument("--map-sequence", required=True)
+    parser.add_argument("--loc-sequence", required=True)
     parser.add_argument("--frame", type=int, required=True)
     parser.add_argument("--crop-radius", type=float, default=120.0)
     parser.add_argument("--near-radius", type=float, default=3.0)
@@ -34,21 +35,37 @@ def main():
     root = Path(os.environ["VTRROOT"])
     data_root = os.environ["VTRRDATA"]
     results_root = Path(os.environ.get("VTRRESULT", root / "results"))
-    sequence = BoreasDataset(data_root, split=[[args.sequence]]).sequences[0]
-    radar_frame = sequence.get_radar(args.frame)
+    dataset = BoreasDataset(
+        data_root,
+        split=[
+            [sequence_id]
+            for sequence_id in dict.fromkeys((args.map_sequence, args.loc_sequence))
+        ],
+    )
+    map_sequence = dataset.get_seq_from_ID(args.map_sequence)
+    loc_sequence = dataset.get_seq_from_ID(args.loc_sequence)
+    radar_frame = loc_sequence.get_radar(args.frame)
     T_radar_enu = np.linalg.inv(radar_frame.pose)
 
-    graph_dir = results_root / "lidar" / args.sequence / args.sequence / "graph"
+    graph_dir = (
+        results_root
+        / "lidar"
+        / args.map_sequence
+        / args.map_sequence
+        / "graph"
+    )
     _, pairs = get_path_vertices_with_submaps(str(graph_dir))
-    T_lidar_robot = build_T_lidar_robot(sequence)
-    candidates = build_path_candidates(sequence, pairs, T_lidar_robot)
-    T_robot_radar = np.linalg.inv(build_T_radar_robot(sequence, T_lidar_robot))
+    T_lidar_robot = build_T_lidar_robot(map_sequence)
+    candidates = build_path_candidates(map_sequence, pairs, T_lidar_robot)
+    T_robot_radar = np.linalg.inv(
+        build_T_radar_robot(loc_sequence, build_T_lidar_robot(loc_sequence))
+    )
     submap_idx = nearest_submap_idx(T_robot_radar @ T_radar_enu, candidates)
     submap, lidar_frame, _ = candidates[submap_idx]
 
     vertices, triangles, _ = load_submap_mesh_to_enu(
         root / "postprocessing" / "submap_meshes",
-        args.sequence,
+        args.map_sequence,
         submap,
         T_lidar_robot,
         lidar_frame.pose,
@@ -116,6 +133,8 @@ def main():
         visualizer.destroy_window()
 
     original_distances = np.linalg.norm(vertices_radar, axis=1)
+    print(f"map sequence: {args.map_sequence}")
+    print(f"localization sequence: {args.loc_sequence}")
     print(f"frame: {args.frame}")
     print(f"submap timestamp: {submap.stamp // 1000}")
     print(f"closest mesh vertex to GT radar: {original_distances.min():.3f} m")
