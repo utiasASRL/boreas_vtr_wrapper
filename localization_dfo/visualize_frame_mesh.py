@@ -27,6 +27,11 @@ def main():
     parser.add_argument("--frame", type=int, required=True)
     parser.add_argument("--crop-radius", type=float, default=120.0)
     parser.add_argument("--near-radius", type=float, default=3.0)
+    parser.add_argument(
+        "--mesh-root",
+        type=Path,
+        default=Path("postprocessing/submap_meshes"),
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--no-window", action="store_true")
     parser.add_argument("--screenshots", action="store_true")
@@ -64,7 +69,7 @@ def main():
     submap, lidar_frame, _ = candidates[submap_idx]
 
     vertices, triangles, _ = load_submap_mesh_to_enu(
-        root / "postprocessing" / "submap_meshes",
+        args.mesh_root if args.mesh_root.is_absolute() else root / args.mesh_root,
         args.map_sequence,
         submap,
         T_lidar_robot,
