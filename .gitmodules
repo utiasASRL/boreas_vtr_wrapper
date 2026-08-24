@@ -11,4 +11,4 @@
     url = ../vtr3_pose_graph.git
 [submodule "vtr3_python"]
     path = external/vtr3_python
-    url = ../vtr3_python.git
+    url = git@github.com:a-krawciw/vtr3_python.git
