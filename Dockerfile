@@ -1,78 +1,17 @@
-FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+FROM utiasasrl/vtr3:latest
 
 ARG GROUPID=0
 ARG USERID=0
 ARG USERNAME=root
 ARG HOMEDIR=/root
-ARG CUDA_ARCH="8.9"
 
 RUN if [ ${GROUPID} -ne 0 ]; then addgroup --gid ${GROUPID} ${USERNAME}; fi \
   && if [ ${USERID} -ne 0 ]; then adduser --disabled-password --gecos '' --uid ${USERID} --gid ${GROUPID} ${USERNAME}; fi
-
-# Default number of threads for make build
-ARG NUMPROC=12
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 ## Switch to root to install dependencies
 USER 0:0
-
-## Dependencies
-RUN apt update && apt upgrade -q -y
-RUN apt update && apt install -q -y cmake git build-essential lsb-release curl gnupg2
-RUN apt update && apt install -q -y libboost-all-dev libomp-dev
-RUN apt update && apt install -q -y libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
-RUN apt update && apt install -q -y freeglut3-dev
-RUN apt update && apt install -q -y python3 python3-distutils python3-pip python3-dev
-RUN apt update && apt install -q -y libeigen3-dev
-RUN apt update && apt install -q -y libsqlite3-dev sqlite3
-RUN apt install -q -y libc6-dbg gdb valgrind
-
-## Install PROJ (8.2.0) (this is for graph_map_server in vtr_navigation)
-RUN apt update && apt install -q -y cmake libsqlite3-dev sqlite3 libtiff-dev libcurl4-openssl-dev
-RUN mkdir -p ${HOMEDIR}/proj && cd ${HOMEDIR}/proj \
-  && git clone https://github.com/OSGeo/PROJ.git . && git checkout 8.2.0 \
-  && mkdir -p ${HOMEDIR}/proj/build && cd ${HOMEDIR}/proj/build \
-  && cmake .. && cmake --build . -j${NUMPROC} --target install
-ENV LD_LIBRARY_PATH=/usr/local/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
-
-## Install ROS2
-# UTF-8
-RUN apt install -q -y locales \
-  && locale-gen en_US en_US.UTF-8 \
-  && update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
-ENV LANG=en_US.UTF-8
-# Add ROS2 key and install from Debian packages
-RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key  -o /usr/share/keyrings/ros-archive-keyring.gpg \
-  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/ros2.list > /dev/null \
-  && apt update && apt install -q -y ros-humble-desktop
-
-## Install VTR specific ROS2 dependencies
-RUN apt update && apt install -q -y \
-  ros-humble-xacro \
-  ros-humble-vision-opencv \
-  ros-humble-perception-pcl ros-humble-pcl-ros \
-  ros-humble-rmw-cyclonedds-cpp 
-
-RUN mkdir -p ${HOMEDIR}/.matplotcpp && cd ${HOMEDIR}/.matplotcpp \
-  && git clone https://github.com/lava/matplotlib-cpp.git . \
-  && mkdir -p ${HOMEDIR}/.matplotcpp/build && cd ${HOMEDIR}/.matplotcpp/build \
-  && cmake .. && cmake --build . -j${NUMPROC} --target install
-
-## Install misc dependencies
-RUN apt update && apt install -q -y \
-  tmux \
-  nodejs npm protobuf-compiler \
-  libboost-all-dev libomp-dev \
-  libpcl-dev \
-  libcanberra-gtk-module libcanberra-gtk3-module \
-  libbluetooth-dev libcwiid-dev \
-  python3-colcon-common-extensions \
-  virtualenv \
-  texlive-latex-extra \
-  clang-format \
-  htop \
-  wget
 
 # Install aws dependencies for boreas dataset installation
 RUN apt update && apt upgrade -q -y zip unzip
@@ -80,82 +19,21 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2
   unzip awscliv2.zip && \
   ./aws/install
 
-# Install vim
-RUN apt update && apt install -q -y vim
+# LaTeX support for plotting
+RUN apt update && apt install -q -y texlive-latex-extra
 
-# Install this for some potential cuda bugs
-RUN apt install nvidia-modprobe
-RUN apt update && apt install
-
-## Install python dependencies
-RUN pip3 install \
-  tmuxp \
-  pyyaml \
-  pyproj \
-  scipy \
-  zmq \
-  flask \
-  flask_socketio \
-  eventlet \
-  python-socketio \
-  python-socketio[client] \
-  websocket-client
-
-##Install LibTorch
-RUN curl https://download.pytorch.org/libtorch/cu117/libtorch-cxx11-abi-shared-with-deps-2.0.0%2Bcu117.zip --output libtorch.zip
-RUN unzip libtorch.zip -d /opt/torch
-RUN rm libtorch.zip
-ENV TORCH_LIB=/opt/torch/libtorch
+## Install Torch. The base image already has a standalone LibTorch C++ build at
+## /opt/torch/libtorch (cxx11-ABI) on LD_LIBRARY_PATH/CMAKE_PREFIX_PATH. pip's torch
+## wheel bundles its own (pre-cxx11-ABI) libtorch, and having both resolve in the same
+## process causes undefined-symbol crashes. So make pip's copy the ONLY one used, by
+## pointing TORCH_LIB/LD_LIBRARY_PATH/CMAKE_PREFIX_PATH at it instead, ahead of the
+## base image's paths -- this also makes any C++ code (e.g. vtr_torch) built later
+## pick up pip's torch via find_package(Torch), so there is only ever one libtorch.
+RUN pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+RUN pip install --upgrade packaging
+ENV TORCH_LIB=/usr/local/lib/python3.10/dist-packages/torch
 ENV LD_LIBRARY_PATH=$TORCH_LIB/lib:${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
 ENV CMAKE_PREFIX_PATH=$TORCH_LIB:$CMAKE_PREFIX_PATH
-ENV NVIDIA_DRIVER_CAPABILITIES compute,utility,graphics
-
-RUN apt install swig liblapack-dev libmetis-dev -y -q --install-recommends
-RUN mkdir -p ${HOMEDIR}/.casadi && cd ${HOMEDIR}/.casadi \
-  && git clone https://github.com/utiasASRL/casadi.git .
-RUN cd ${HOMEDIR}/.casadi \
-  && mkdir -p build && cd build \
-  && cmake build -DWITH_PYTHON=ON -DWITH_PYTHON3=ON -DWITH_IPOPT=ON -DWITH_BUILD_IPOPT=ON -DWITH_BUILD_REQUIRED=ON -DWITH_SELFCONTAINED=ON .. \
-  && make -j${NUMPROC} install
-ENV PYTHONPATH=${PYTHONPATH}:/usr/local
-ENV LD_LIBRARY_PATH=/usr/local/casadi:${LD_LIBRARY_PATH}
-
-# OpenCV stuff
-RUN apt install -q -y libgtk2.0-dev pkg-config libavcodec-dev libavformat-dev libswscale-dev python3-dev python3-numpy
-
-RUN mkdir -p ${HOMEDIR}/opencv && cd ${HOMEDIR}/opencv \
-&& git clone https://github.com/opencv/opencv.git . 
-
-RUN cd ${HOMEDIR}/opencv && git checkout 4.10.0
-RUN mkdir -p ${HOMEDIR}/opencv_contrib && cd ${HOMEDIR}/opencv_contrib \
-&& git clone https://github.com/opencv/opencv_contrib.git . 
-RUN cd ${HOMEDIR}/opencv_contrib && git checkout 4.10.0 
-
-
-RUN apt install -q -y build-essential cmake git libgtk2.0-dev pkg-config libavcodec-dev libavformat-dev libswscale-dev python3-dev python3-numpy
-# # generate Makefiles (note that install prefix is customized to: /usr/local/opencv_cuda)
-
-RUN mkdir -p ${HOMEDIR}/opencv/build && cd ${HOMEDIR}/opencv/build \
-&& cmake -D CMAKE_BUILD_TYPE=RELEASE \
--D CMAKE_INSTALL_PREFIX=/usr/local/opencv_cuda \
--D OPENCV_EXTRA_MODULES_PATH=${HOMEDIR}/opencv_contrib/modules \
--D PYTHON_DEFAULT_EXECUTABLE=/usr/bin/python3.10 \
--DBUILD_opencv_python2=OFF \
--DBUILD_opencv_python3=ON \
--DWITH_OPENMP=ON \
--DWITH_CUDA=ON \
--D CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-11.8 \
--DOPENCV_ENABLE_NONFREE=ON \
--D OPENCV_GENERATE_PKGCONFIG=ON \
--DWITH_TBB=ON \
--DWITH_GTK=ON \
--DWITH_OPENMP=ON \
--DWITH_FFMPEG=ON \
--DBUILD_opencv_cudacodec=OFF \
--D BUILD_EXAMPLES=OFF \
--D CUDA_ARCH_BIN=$CUDA_ARCH ..  && make -j16 && make install
-
-ENV LD_LIBRARY_PATH=/usr/local/opencv_cuda/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
 
 # Set up entrypoint
 COPY ./entrypoint.sh ./entrypoint.sh
