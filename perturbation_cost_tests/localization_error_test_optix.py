@@ -11,13 +11,13 @@ import torch
 from pyboreas import BoreasDataset
 from pyboreas.utils.odometry import interpolate_poses
 from pyboreas.utils.utils import get_inverse_tf
-from scipy.ndimage import gaussian_filter1d, maximum_filter1d
+from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter1d, maximum_filter1d, shift
 
 from localization_dfo.io_utils import (
     build_T_lidar_robot,
     build_patch_config,
     cen_filter_2d,
-    correct_offsets,
     get_path_vertices_with_submaps,
     load_submap_mesh_to_enu,
 )
@@ -34,6 +34,31 @@ from perturbation_cost_tests.perturbation_utils import (
 from perturbation_cost_tests.radar_translator_cnn import RadarTranslatorCNN
 
 
+def correct_offsets_gt(radar_frame, frame_index, sequence):
+    neighbors = sequence.radar_frames[frame_index - 1:frame_index + 2]
+    times = [frame.timestamp_micro for frame in neighbors]
+    body_rates = [frame.body_rate.flatten() for frame in neighbors]
+    velocities = interp1d(times, body_rates, axis=0, kind="quadratic")(
+        radar_frame.timestamps.flatten()
+    )[:, :2]
+
+    shifted = shift(
+        radar_frame.polar,
+        shift=(0, sequence.calib.radar_offset / radar_frame.resolution),
+        order=3,
+        mode="nearest",
+    )
+    azimuths = radar_frame.azimuths.flatten()
+    radial = -velocities[:, 0] * np.cos(azimuths) - velocities[:, 1] * np.sin(azimuths)
+    chirp_type = radar_frame.chirp_type.flatten()
+    chirp_sign = np.where(chirp_type == 0, -1, chirp_type)
+    bin_shift = chirp_sign * 0.05024 * radial / radar_frame.resolution
+    corrected = np.empty_like(shifted)
+    for row in range(len(shifted)):
+        corrected[row] = shift(shifted[row], -bin_shift[row], order=3, mode="nearest")
+    return corrected
+
+
 def make_perturbations():
     # x_offsets = np.unique(
     #     np.concatenate([
@@ -46,9 +71,9 @@ def make_perturbations():
         # "x": np.linspace(-0.3, 0.3, 601),
         # "y": np.linspace(-0.3, 0.3, 601),
         # "z": np.linspace(-0.3, 0.3, 601),
-        "x": np.linspace(-0.2, 0.2, 41),
-        "y": np.linspace(-0.2, 0.2, 41),
-        "z": np.linspace(-0.2, 0.2, 41),
+        # "x": np.linspace(-0.2, 0.2, 41),
+        # "y": np.linspace(-0.2, 0.2, 41),
+        "z": np.linspace(-1.0, 1.0, 21),
         # "x": [0.0],
         # "y": [0.0],
         # "z": [0.0],
@@ -61,9 +86,9 @@ def make_perturbations():
         # "roll": np.linspace(-2.0, 2.0, 401),
         # "pitch": np.linspace(-2.0, 2.0, 401),
         # "yaw": np.linspace(-2.0, 2.0, 401),
-        "roll": np.linspace(-2.0, 2.0, 41),
-        "pitch": np.linspace(-2.0, 2.0, 41),
-        "yaw": np.linspace(-2.0, 2.0, 41),
+        "roll": np.linspace(-3.0, 3.0, 21),
+        "pitch": np.linspace(-3.0, 3.0, 21),
+        # "yaw": np.linspace(-2.0, 2.0, 41),
     }
 
     return generate_delta_transforms(
@@ -385,7 +410,7 @@ def run_sequence(
 
         tracer.set_scan(odom_transforms, radar_azimuths)
 
-        shifted_polar = correct_offsets(radar_frame, radar_frame_idx, loc_seq)
+        shifted_polar = correct_offsets_gt(radar_frame, radar_frame_idx, loc_seq)
         filtered_polar = cen_filter_2d(
             shifted_polar,
             sigma_gauss=15.0,
@@ -400,7 +425,7 @@ def run_sequence(
                 mode="reflect",
             )
 
-        norm_factor = 0.5613
+        norm_factor = 0.5172
         target_bins = filtered_polar.shape[1]
         output_bins = 2736
         covis_window_size = 15
@@ -482,19 +507,19 @@ def run_sequence(
 
         radar_frame.unload_data()
         print(f"radar frame unloaded! elapsed={perf_counter() - t0:.3f}s")
-        radar_frame_idx += 100
+        radar_frame_idx += 2
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Plot perturbation costs using cached NKSR meshes and OptiX ray tracing."
     )
-    parser.add_argument("--radar-start-frame", type=int, default=65)
+    parser.add_argument("--radar-start-frame", type=int, default=2625)
     parser.add_argument("--radar-end-frame", type=int, default=None)
     parser.add_argument("--map-sequence", required=True)
     parser.add_argument("--loc-sequence", required=True)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--device", default="cuda:3" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--covisibility", action="store_true")
     parser.add_argument("--gaussian-blur", action="store_true")
     parser.add_argument("--mesh-root", type=Path, default=None)
@@ -519,13 +544,11 @@ def main():
         raise RuntimeError("The OptiX perturbation test requires a CUDA device.")
 
     lidar_results_dir = os.path.join(boreas_vtr_wrapper_dir, "results/lidar")
-    weights_path = args.model_weights or (
-        Path(boreas_vtr_wrapper_dir)
-        / "model_dev"
-        / "model_weights"
-        / "6_deg_attentional_skip_bigger"
-        / "best.pth"
-    )
+    weights_path = os.path.join(
+            boreas_vtr_wrapper_dir,
+            # "model_dev/route_weights/1-suburb/best_total.pth",
+            "model_dev/route_weights/1-farm/best_total.pth",
+        )
     mesh_root = args.mesh_root or (
         Path(boreas_vtr_wrapper_dir) / "postprocessing" / "submap_meshes"
     )
