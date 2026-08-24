@@ -21,7 +21,7 @@ install/
 log/
 
 # Heavy IO
-data/
+data
 results/
 
 #
