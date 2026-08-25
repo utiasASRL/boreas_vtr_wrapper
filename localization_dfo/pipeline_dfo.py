@@ -49,6 +49,7 @@ RESULT_FIELDNAMES = [
     "iterations",
     "optimization_mode",
     "near_depth_patch_count",
+    "planar_frames_remaining",
     "optimizer_budget",
     "candidate_x_m",
     "candidate_y_m",
@@ -96,6 +97,7 @@ FINE_TRANSLATION_TARGET_M = 0.01
 FINE_ROTATION_TARGET_DEG = 0.05
 NEAR_DEPTH_M = 5.0
 NEAR_DEPTH_PATCH_COUNT = 3
+PLANAR_HOLD_FRAMES = 10
 PLANAR_DOF_INDICES = (0, 1, 5)
 
 
@@ -266,10 +268,12 @@ def count_near_depth_patches(depth):
     return int((patch_min < NEAR_DEPTH_M).sum().item())
 
 
-def optimizer_dofs_and_budget(near_depth_patch_count, budget):
-    if near_depth_patch_count >= NEAR_DEPTH_PATCH_COUNT:
-        return PLANAR_DOF_INDICES, max(1, budget // 2)
-    return range(6), budget
+def optimizer_dofs_and_budget(near_depth_patch_count, budget, frames_remaining=0):
+    triggered = near_depth_patch_count >= NEAR_DEPTH_PATCH_COUNT
+    if triggered or frames_remaining:
+        next_remaining = PLANAR_HOLD_FRAMES if triggered else frames_remaining - 1
+        return PLANAR_DOF_INDICES, max(1, budget // 2), next_remaining
+    return range(6), budget, 0
 
 
 def expand_optimizer_delta(active_eps, active_dofs):
@@ -475,7 +479,7 @@ def load_resume_state(csv_path, pose_rows, map_seq, loc_seq, radar_start_frame):
         for last_result in csv.DictReader(f):
             pass
     if last_result is None:
-        return None, "tracking", 0, 0
+        return None, "tracking", 0, 0, 0
 
     previous_frame = loc_seq.radar_frames[radar_start_frame - 1]
     previous_timestamp = previous_frame.timestamp_micro
@@ -516,7 +520,13 @@ def load_resume_state(csv_path, pose_rows, map_seq, loc_seq, radar_start_frame):
     elif state == "recovery" and not rejected and not jump:
         state = "tracking"
     print(f"Resuming after radar frame {radar_start_frame - 1} in {state} state")
-    return previous_pose, state, consecutive_rejections, 0
+    return (
+        previous_pose,
+        state,
+        consecutive_rejections,
+        0,
+        int(last_result["planar_frames_remaining"]),
+    )
 
 
 def load_dro_odometry(path, radar_frames):
@@ -738,6 +748,7 @@ def run_sequence(
         localization_state,
         consecutive_rejections,
         healthy_recovery_accepts,
+        planar_frames_remaining,
     ) = load_resume_state(
         results_csv_path,
         pyboreas_rows,
@@ -886,8 +897,8 @@ def run_sequence(
         if not model_warmed_up:
             torch.cuda.synchronize(device)
             model_warmed_up = True
-        active_dofs, optimizer_budget = optimizer_dofs_and_budget(
-            near_depth_patch_count, imfil_budget
+        active_dofs, optimizer_budget, planar_frames_remaining = optimizer_dofs_and_budget(
+            near_depth_patch_count, imfil_budget, planar_frames_remaining
         )
         use_2d = active_dofs == PLANAR_DOF_INDICES
         cost_call_timings = []
@@ -1041,6 +1052,7 @@ def run_sequence(
                 {
                     "optimization_mode": "2d" if use_2d else "3d",
                     "near_depth_patch_count": near_depth_patch_count,
+                    "planar_frames_remaining": planar_frames_remaining,
                     "optimizer_budget": optimizer_budget,
                     "optimization_time_s": optimization_time_s,
                     "model_inference_time_s": sum(
