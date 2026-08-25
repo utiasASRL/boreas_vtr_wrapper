@@ -47,6 +47,9 @@ RESULT_FIELDNAMES = [
     "initial_cost",
     "final_cost",
     "iterations",
+    "optimization_mode",
+    "near_depth_patch_count",
+    "optimizer_budget",
     "candidate_x_m",
     "candidate_y_m",
     "candidate_z_m",
@@ -91,6 +94,9 @@ COARSE_TRANSLATION_TARGET_M = 0.3
 COARSE_ROTATION_TARGET_DEG = 3.0
 FINE_TRANSLATION_TARGET_M = 0.01
 FINE_ROTATION_TARGET_DEG = 0.05
+NEAR_DEPTH_M = 5.0
+NEAR_DEPTH_PATCH_COUNT = 3
+PLANAR_DOF_INDICES = (0, 1, 5)
 
 
 def load_radar_translator_model(weights_path, device):
@@ -252,6 +258,24 @@ def calculate_imfil_scales(bounds):
     return max(0, math.ceil(math.log2(coarse_ratio))), max(
         0, math.ceil(math.log2(fine_ratio))
     )
+
+
+def count_near_depth_patches(depth):
+    valid = torch.isfinite(depth) & (depth > 0)
+    patch_min = depth.masked_fill(~valid, torch.inf).amin(dim=(-2, -1))
+    return int((patch_min < NEAR_DEPTH_M).sum().item())
+
+
+def optimizer_dofs_and_budget(near_depth_patch_count, budget):
+    if near_depth_patch_count >= NEAR_DEPTH_PATCH_COUNT:
+        return PLANAR_DOF_INDICES, max(1, budget // 2)
+    return range(6), budget
+
+
+def expand_optimizer_delta(active_eps, active_dofs):
+    eps = np.zeros(6)
+    eps[list(active_dofs)] = active_eps
+    return eps
 
 
 def pose_gate_diagnostics(observed, initial_prediction, candidate_prediction, eps_best):
@@ -853,11 +877,19 @@ def run_sequence(
         ).contiguous()
         optix_backend.set_scan(odom_transforms, radar_azimuths)
         radar_preprocessing_time_s += perf_counter() - radar_gpu_setup_start
+        with torch.inference_mode():
+            initial_depth = optix_backend.trace(T_init)
+            near_depth_patch_count = count_near_depth_patches(initial_depth)
+            if not model_warmed_up:
+                model(initial_depth.unsqueeze(1))
+        del initial_depth
         if not model_warmed_up:
-            with torch.inference_mode():
-                model(optix_backend.trace(T_init).unsqueeze(1))
             torch.cuda.synchronize(device)
             model_warmed_up = True
+        active_dofs, optimizer_budget = optimizer_dofs_and_budget(
+            near_depth_patch_count, imfil_budget
+        )
+        use_2d = active_dofs == PLANAR_DOF_INDICES
         cost_call_timings = []
         lambda_prior = (
             lambda_prior_recovery
@@ -865,7 +897,8 @@ def run_sequence(
             else lambda_prior_tracking
         )
 
-        def cost_fn(eps):
+        def cost_fn(active_eps):
+            eps = expand_optimizer_delta(active_eps, active_dofs)
             cost, timing = compute_optix_cost(
                 optix_backend,
                 left_se3_retract(T=T_init, delta=eps),
@@ -879,7 +912,7 @@ def run_sequence(
             return total_cost
 
         logger = ObjectiveLogger(cost_fn)
-        eps0 = np.zeros(6)
+        eps0 = np.zeros(len(active_dofs))
 
         torch.cuda.reset_peak_memory_stats(device)
         t_opt = perf_counter()
@@ -889,12 +922,14 @@ def run_sequence(
             scale_start=scale_start, scale_depth=scale_depth
         )
         result, _ = run_imfil_direct(
-            "imfil", logger, eps0, bounds, imfil_budget, imfil_options or None
+            "imfil", logger, eps0, bounds[list(active_dofs)], optimizer_budget,
+            imfil_options or None,
         )
         torch.cuda.synchronize(device)
         optimization_time_s = perf_counter() - t_opt
         peak_cuda_memory_mb = torch.cuda.max_memory_allocated(device) / 1024**2
-        eps_best, candidate_cost = extract_best_from_result(result, logger)
+        active_eps_best, candidate_cost = extract_best_from_result(result, logger)
+        eps_best = expand_optimizer_delta(active_eps_best, active_dofs)
         candidate_prior_penalty = float(
             lambda_prior * np.sum((eps_best / sigma_prior) ** 2)
         )
@@ -1004,6 +1039,9 @@ def run_sequence(
                 candidate_cost,
                 gate_fields,
                 {
+                    "optimization_mode": "2d" if use_2d else "3d",
+                    "near_depth_patch_count": near_depth_patch_count,
+                    "optimizer_budget": optimizer_budget,
                     "optimization_time_s": optimization_time_s,
                     "model_inference_time_s": sum(
                         timing["model_inference_time_s"] for timing in cost_call_timings
