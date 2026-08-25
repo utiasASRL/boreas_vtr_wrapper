@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <filesystem>
 
 #include "rclcpp/rclcpp.hpp"
@@ -7,7 +8,8 @@
 #include "vtr_common/timing/utils.hpp"
 #include "vtr_common/utils/filesystem.hpp"
 #include "vtr_logging/logging_init.hpp"
-#include "vtr_radar/pipeline.hpp"
+#include "vtr_radar/icp_pipeline.hpp"
+#include "vtr_radar/direct_pipeline.hpp"
 #include "vtr_tactic/pipelines/factory.hpp"
 #include "vtr_tactic/rviz_tactic_callback.hpp"
 #include "vtr_tactic/tactic.hpp"
@@ -70,9 +72,10 @@ int main(int argc, char **argv) {
   // Load IMU data
   const auto use_imu = node->declare_parameter<bool>("boreas.imu.use_imu", false);
   const auto imu_name = node->declare_parameter<std::string>("boreas.imu.imu_name", "dmu");
+  const auto force_wrap = node->declare_parameter<bool>("boreas.imu.force_wrap", false);
   CLOG(WARNING, "boreas_wrapper") << "IMU enabled: " << use_imu;
   std::vector<IMUMeasurement> all_imu_meas;
-  EdgeTransform T_imu_robot; 
+  EdgeTransform T_imu_robot;
   if (use_imu) {
     // Check that imu name is one of "dmu", "aeva", "imu"
     CLOG(WARNING, "boreas_wrapper") << "IMU name: " << imu_name;
@@ -86,6 +89,7 @@ int main(int argc, char **argv) {
     T_imu_robot = load_T_imu_robot(odo_dir, imu_name);
     CLOG(WARNING, "boreas_wrapper") << "Loaded " << all_imu_meas.size() << " IMU measurements";
     CLOG(WARNING, "boreas_wrapper") << "Transform from IMU to robot has been set to:\n" << T_imu_robot;
+    CLOG(WARNING, "boreas_wrapper") << "IMU force wrap: " << force_wrap;
   }
 
   // Load wheel encoder data
@@ -169,7 +173,6 @@ int main(int argc, char **argv) {
 
   // main loop
   int frame = 0;
-  int imu_counter = 0;
   int wheel_counter = 0;
   auto it = files.begin();
   while (it != files.end()) {
@@ -207,24 +210,83 @@ int main(int argc, char **argv) {
       int64_t end_timestamp;
       load_radar_time_span(scan, start_timestamp, end_timestamp);
 
-      if (imu_counter == 0) {
-        // Find IMU measurement right before radar frame to initialize
-        while (all_imu_meas[imu_counter].timestamp_ns < start_timestamp) {
-          ++imu_counter;
-        }
-      }
-
-      // Loop through all IMU measurements from previous one to end of current radar frame
-      // This captures IMU measurements that are between frames
-      Eigen::Matrix<double, 4, 1> imu_meas;
-      while (imu_counter < all_imu_meas.size() && all_imu_meas[imu_counter].timestamp_ns < end_timestamp) {
+      const auto make_gyro_msg = [](const IMUMeasurement &m, int64_t stamp_ns) {
         auto gyro_msg = sensor_msgs::msg::Imu();
-        gyro_msg.angular_velocity.x = all_imu_meas[imu_counter].angvel_x;
-        gyro_msg.angular_velocity.y = all_imu_meas[imu_counter].angvel_y;
-        gyro_msg.angular_velocity.z = all_imu_meas[imu_counter].angvel_z;
-        gyro_msg.header.stamp = rclcpp::Time(all_imu_meas[imu_counter].timestamp_ns);
-        gyro_msgs.push_back(gyro_msg);
-        ++imu_counter;
+        gyro_msg.angular_velocity.x = m.angvel_x;
+        gyro_msg.angular_velocity.y = m.angvel_y;
+        gyro_msg.angular_velocity.z = m.angvel_z;
+        gyro_msg.header.stamp = rclcpp::Time(stamp_ns);
+        return gyro_msg;
+      };
+
+      // direct_odometry.cpp reconstructs gyro/scan timestamps as
+      // sec*1e6 + nanosec/1000, i.e. it truncates to microsecond resolution
+      // before comparing them. A boundary nudge smaller than 1us can get
+      // swallowed by that truncation and land back on the same value, so
+      // the wrap margin below must be at least 1000ns.
+      constexpr int64_t kWrapMarginNs = 1000;
+
+      // Load gyro measurements bracketing the radar scan timestamps
+      const auto begin_it = std::lower_bound(
+          all_imu_meas.begin(), all_imu_meas.end(), start_timestamp,
+          [](const IMUMeasurement &m, int64_t t) { return m.timestamp_ns < t; });
+      const auto end_it = std::lower_bound(
+          all_imu_meas.begin(), all_imu_meas.end(), end_timestamp,
+          [](const IMUMeasurement &m, int64_t t) { return m.timestamp_ns < t; });
+
+      if (begin_it != all_imu_meas.begin()) {
+        const auto &m = *std::prev(begin_it);
+        // lower_bound only guarantees m.timestamp_ns < start_timestamp, which
+        // should always hold here by construction, but clamp defensively so
+        // the downstream strict "< scan start" wrap check (at microsecond
+        // resolution) can never be starved by a boundary tie.
+        if (m.timestamp_ns > start_timestamp - kWrapMarginNs) {
+          CLOG(WARNING, "boreas_wrapper")
+              << "IMU sample before scan start lands within " << kWrapMarginNs
+              << "ns of the boundary, nudging its timestamp back to satisfy "
+                 "the wrap check.";
+        }
+        gyro_msgs.push_back(make_gyro_msg(
+            m, std::min(m.timestamp_ns, start_timestamp - kWrapMarginNs)));
+      } else if (force_wrap && !all_imu_meas.empty()) {
+        // No real IMU sample exists before the scan start (e.g. the IMU
+        // log starts partway through the sequence). force_wrap fabricates
+        // a "before" anchor from the nearest available sample so the
+        // wrap-around requirement is still satisfied.
+        CLOG(WARNING, "boreas_wrapper")
+            << "No IMU sample before scan start, force_wrap is fabricating one.";
+        gyro_msgs.push_back(
+            make_gyro_msg(*begin_it, start_timestamp - kWrapMarginNs));
+      }
+      for (auto iter = begin_it; iter != end_it; ++iter) {
+        gyro_msgs.push_back(make_gyro_msg(*iter, iter->timestamp_ns));
+      }
+      if (end_it != all_imu_meas.end()) {
+        const auto &m = *end_it;
+        // lower_bound only guarantees m.timestamp_ns >= end_timestamp, which
+        // is not enough: the downstream wrap check requires a sample
+        // strictly after the scan's last azimuth timestamp, compared at
+        // microsecond resolution. When the real sample lands within one
+        // microsecond of (or exactly on) end_timestamp, that check silently
+        // fails and the whole frame's localization gets dropped. Nudge
+        // forward by kWrapMarginNs in that case, matching the margin
+        // force_wrap already uses below.
+        if (m.timestamp_ns < end_timestamp + kWrapMarginNs) {
+          CLOG(WARNING, "boreas_wrapper")
+              << "IMU sample after scan end lands within " << kWrapMarginNs
+              << "ns of the boundary, nudging its timestamp forward to "
+                 "satisfy the wrap check.";
+        }
+        gyro_msgs.push_back(make_gyro_msg(
+            m, std::max(m.timestamp_ns, end_timestamp + kWrapMarginNs)));
+      } else if (force_wrap && !all_imu_meas.empty()) {
+        // No real IMU sample exists after the scan end (e.g. the IMU log
+        // ends before the radar log). force_wrap fabricates an "after"
+        // anchor from the nearest available sample.
+        CLOG(WARNING, "boreas_wrapper")
+            << "No IMU sample after scan end, force_wrap is fabricating one.";
+        gyro_msgs.push_back(make_gyro_msg(*std::prev(all_imu_meas.end()),
+                                           end_timestamp + kWrapMarginNs));
       }
     }
 
@@ -274,6 +336,11 @@ int main(int argc, char **argv) {
 
     // set radar frame
     query_data->scan.emplace(scan);
+
+    // Fill in scan_msg for pipelines that use it
+    navtech_msgs::msg::RadarBScanMsg scan_msg;
+    scan_msg.b_scan_img.header.stamp = rclcpp::Time(timestamp);
+    query_data->scan_msg.emplace(scan_msg);
 
     // set gyro messages
     if (gyro_msgs.size() > 0) {
