@@ -1006,8 +1006,8 @@ def run_sequence(
             save_cartesian_radar_image(
                 radar_frame,
                 filtered_polar / model.radar_normalization_scale,
-                # image_root / "labels" / f"{radar_frame.frame}.png",
-                image_root / "labels" / f"{radar_frame_idx}.png",
+                image_root / "labels" / f"{radar_frame.frame}.png",
+                # image_root / "labels" / f"{radar_frame_idx}.png",
             )
         if save_predictions:
             predictions = accepted_prediction
@@ -1023,8 +1023,8 @@ def run_sequence(
             save_cartesian_radar_image(
                 radar_frame,
                 padded_predictions,
-                # image_root / "predictions" / f"{radar_frame.frame}.png",
-                image_root / "predictions" / f"{radar_frame_idx}.png",
+                image_root / "predictions" / f"{radar_frame.frame}.png",
+                # image_root / "predictions" / f"{radar_frame_idx}.png",
             )
         image_save_time_s = perf_counter() - image_save_start
 
