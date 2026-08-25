@@ -87,7 +87,7 @@ ROTATION_JUMP_DEG = 0.50
 MISSING_OBSERVED_EVIDENCE_FRACTION = 0.60
 SUBMAP_SEARCH_RADIUS = 5
 SUBMAP_SEARCH_MAX_RADIUS = 20
-COARSE_TRANSLATION_TARGET_M = 1.0
+COARSE_TRANSLATION_TARGET_M = 0.3
 COARSE_ROTATION_TARGET_DEG = 3.0
 FINE_TRANSLATION_TARGET_M = 0.01
 FINE_ROTATION_TARGET_DEG = 0.05
@@ -212,29 +212,29 @@ def optimizer_bounds(localization_state):
 
 
     # wide
-    bounds = np.array(
-        [
-            [-1.0, 1.0],
-            [-1.0, 1.0],
-            [-1.0, 1.0],
-            [-3.0, 3.0],
-            [-3.0, 3.0],
-            [-3.0, 3.0],
-        ],
-        dtype=float,
-    )
-
     # bounds = np.array(
-    #         [
-    #             [-0.3, 0.3],
-    #             [-0.3, 0.3],
-    #             [-0.3, 0.3],
-    #             [-3.0, 3.0],
-    #             [-3.0, 3.0],
-    #             [-3.0, 3.0],
-    #         ],
-    #         dtype=float,
-    #     )
+    #     [
+    #         [-1.0, 1.0],
+    #         [-1.0, 1.0],
+    #         [-1.0, 1.0],
+    #         [-3.0, 3.0],
+    #         [-3.0, 3.0],
+    #         [-3.0, 3.0],
+    #     ],
+    #     dtype=float,
+    # )
+
+    bounds = np.array(
+            [
+                [-0.3, 0.3],
+                [-0.3, 0.3],
+                [-0.3, 0.3],
+                [-3.0, 3.0],
+                [-3.0, 3.0],
+                [-3.0, 3.0],
+            ],
+            dtype=float,
+        )
     bounds[3:] = np.deg2rad(bounds[3:])
     return bounds
 
@@ -960,7 +960,8 @@ def run_sequence(
             save_cartesian_radar_image(
                 radar_frame,
                 filtered_polar / model.radar_normalization_scale,
-                image_root / "labels" / f"{radar_frame.frame}.png",
+                # image_root / "labels" / f"{radar_frame.frame}.png",
+                image_root / "labels" / f"{radar_frame_idx}.png",
             )
         if save_predictions:
             predictions = accepted_prediction
@@ -976,7 +977,8 @@ def run_sequence(
             save_cartesian_radar_image(
                 radar_frame,
                 padded_predictions,
-                image_root / "predictions" / f"{radar_frame.frame}.png",
+                # image_root / "predictions" / f"{radar_frame.frame}.png",
+                image_root / "predictions" / f"{radar_frame_idx}.png",
             )
         image_save_time_s = perf_counter() - image_save_start
 
@@ -1159,8 +1161,8 @@ def main():
     lambda_prior_recovery = 1.0
     # lambda_prior_tracking = 0
     # lambda_prior_recovery = 0
-    # sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 1.0, 1.0, 0.3, 1.25, 1.25, 0.3
-    sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 1000.0, 1000.0, 0.3, 3.0, 3.0, 0.1
+    sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 0.075, 0.050, 0.05, 0.15, 0.15, 0.05
+    # sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 1000.0, 1000.0, 0.3, 3.0, 3.0, 0.1
     
     sigma_prior = np.array([
         sigma_x,
