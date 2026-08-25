@@ -715,6 +715,7 @@ def run_sequence(
     mesh_root,
     imfil_budget,
     save_predictions,
+    save_init,
     save_labels,
     dro_odometry_path,
     validate_dro_odometry,
@@ -888,10 +889,15 @@ def run_sequence(
         ).contiguous()
         optix_backend.set_scan(odom_transforms, radar_azimuths)
         radar_preprocessing_time_s += perf_counter() - radar_gpu_setup_start
+        initial_prediction = None
         with torch.inference_mode():
             initial_depth = optix_backend.trace(T_init)
             near_depth_patch_count = count_near_depth_patches(initial_depth)
-            if not model_warmed_up:
+            if save_init or pose_gating:
+                initial_prediction = torch.sigmoid(
+                    model(initial_depth.unsqueeze(1))
+                ).cpu().numpy()
+            elif not model_warmed_up:
                 model(initial_depth.unsqueeze(1))
         del initial_depth
         if not model_warmed_up:
@@ -966,7 +972,6 @@ def run_sequence(
             "consecutive_rejections": 0,
         }
         if pose_gating:
-            initial_prediction = predict_radar_at_pose(T_init, model, optix_backend)
             candidate_prediction = predict_radar_at_pose(T_candidate, model, optix_backend)
             diagnostics, jump_reasons, prediction_reasons = pose_gate_diagnostics(
                 radar_polar_cropped,
@@ -1002,6 +1007,19 @@ def run_sequence(
 
         image_save_start = perf_counter()
         image_root = results_csv_path.parent
+        if save_init:
+            if initial_prediction.shape != radar_polar_cropped.shape:
+                raise RuntimeError(
+                    f"Initial prediction shape {initial_prediction.shape} does not match "
+                    f"cropped radar shape {radar_polar_cropped.shape}."
+                )
+            padded_init = np.zeros_like(filtered_polar, dtype=np.float32)
+            padded_init[:, :initial_prediction.shape[1]] = initial_prediction
+            save_cartesian_radar_image(
+                radar_frame,
+                padded_init,
+                image_root / "init_predictions" / f"{radar_frame.frame}.png",
+            )
         if save_labels:
             save_cartesian_radar_image(
                 radar_frame,
@@ -1135,6 +1153,7 @@ def main():
     parser.add_argument("--imfil-function-delta", type=float)
     parser.add_argument("--imfil-stencil-delta", type=float)
     parser.add_argument("--save-predictions", action="store_true")
+    parser.add_argument("--save-init", action="store_true")
     parser.add_argument("--save-labels", action="store_true")
     parser.add_argument("--dro-odometry", type=Path) # TODO change this to wheel_odometry!
     parser.add_argument("--validate-dro-odometry", action="store_true")
@@ -1258,6 +1277,7 @@ def main():
             mesh_root=args.mesh_root,
             imfil_budget=args.imfil_budget,
             save_predictions=args.save_predictions,
+            save_init=args.save_init,
             save_labels=args.save_labels,
             dro_odometry_path=dro_odometry_paths[sequence_id],
             validate_dro_odometry=args.validate_dro_odometry,
