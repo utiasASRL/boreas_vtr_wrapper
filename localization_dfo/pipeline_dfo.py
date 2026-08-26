@@ -1133,7 +1133,8 @@ def resolve_dro_odometry_paths(wrapper_dir, sequence_ids, override=None):
     sequence_ids = list(dict.fromkeys(sequence_ids))
     if override and len(sequence_ids) != 1:
         raise ValueError("--dro-odometry can only be used with one --loc-sequence.")
-    output_root = Path(wrapper_dir) / "external" / "wheel_odometry" / "output"
+    # output_root = Path(wrapper_dir) / "external" / "wheel_odometry" / "output"
+    output_root = Path(wrapper_dir) / "external" / "dro" / "output"
     return sequence_ids, {
         sequence_id: override
         or output_root / sequence_id / "odometry_result" / "azimuth_odometry.npz"
@@ -1155,7 +1156,7 @@ def main():
     parser.add_argument("--save-predictions", action="store_true")
     parser.add_argument("--save-init", action="store_true")
     parser.add_argument("--save-labels", action="store_true")
-    parser.add_argument("--dro-odometry", type=Path) # TODO change this to wheel_odometry!
+    parser.add_argument("--dro-odometry", type=Path)
     parser.add_argument("--validate-dro-odometry", action="store_true")
     parser.add_argument("--pose-gating", action="store_true")
     output_mode = parser.add_mutually_exclusive_group()
@@ -1230,7 +1231,7 @@ def main():
     lambda_prior_recovery = 1.0
     # lambda_prior_tracking = 0
     # lambda_prior_recovery = 0
-    sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 0.075, 0.050, 0.05, 0.15, 0.15, 0.05
+    sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 0.075, 0.050, 0.05, 0.15, 0.15, 0.05 # OG3 best values
     # sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 1000.0, 1000.0, 0.3, 3.0, 3.0, 0.1
     
     sigma_prior = np.array([
