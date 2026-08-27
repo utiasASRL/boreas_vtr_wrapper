@@ -54,7 +54,7 @@ class BagFileParser():
 def main(dataset_dir, result_dir, quiet=False):
   result_dir = osp.normpath(result_dir)
   odo_input = osp.basename(result_dir)
-  loc_inputs = [i for i in os.listdir(result_dir) if (i != odo_input and i.startswith("boreas"))]
+  loc_inputs = [i for i in os.listdir(result_dir) if (i != odo_input and (i.startswith("boreas") or i.startswith("warthog")))]
   loc_inputs.sort()
   if not quiet:
     print("Result Directory:", result_dir)
