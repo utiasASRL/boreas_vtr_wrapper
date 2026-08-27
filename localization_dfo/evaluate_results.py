@@ -59,23 +59,27 @@ def stats(values):
     }
 
 
+def calculate_stats(rows):
+    return [
+        {"dof": name, **stats([row[f"final_{name}"] for row in rows])}
+        for name, _ in DOFS
+    ]
+
+
 def write_stats(rows, output_csv):
-    stat_rows = []
-    for name, _ in DOFS:
-        values = [row[f"final_{name}"] for row in rows]
-        stat_rows.append({"dof": name, **stats(values)})
+    stat_rows = calculate_stats(rows)
 
     with output_csv.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["dof", "rmse", "mean_abs", "max_abs", "mean"])
         writer.writeheader()
         writer.writerows(stat_rows)
 
-    print(f"{'dof':<10} {'rmse':>12} {'mean_abs':>12} {'max_abs':>12} {'mean':>12}")
-    for row in stat_rows:
-        print(
-            f"{row['dof']:<10} {row['rmse']:12.6g} {row['mean_abs']:12.6g} "
-            f"{row['max_abs']:12.6g} {row['mean']:12.6g}"
-        )
+
+def print_collective_rmse(rows):
+    print(f"Collective RMSE across {len(rows)} frames")
+    print(f"{'dof':<10} {'rmse':>12}")
+    for row in calculate_stats(rows):
+        print(f"{row['dof']:<10} {row['rmse']:12.6g}")
 
 
 def write_threshold_table(rows, dofs, thresholds, unit, output_csv):
@@ -97,12 +101,6 @@ def write_threshold_table(rows, dofs, thresholds, unit, output_csv):
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(table_rows)
-
-    print()
-    print("final absolute error percent below threshold")
-    print(" ".join([f"{'dof':<10}", *[f"<{threshold:g} {unit:>3}" for threshold in thresholds]]))
-    for row in table_rows:
-        print(" ".join([f"{row['dof']:<10}", *[f"{row[field]:8.2f}" for field in fieldnames[1:]]]))
 
 
 def single_frame_odometry_errors(frame_transforms, gt_poses, frame_indices):
@@ -190,14 +188,7 @@ def write_plots(rows, frame_indices, odometry_errors, output_dir):
         plt.close(fig)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Evaluate DFO localization result errors.")
-    parser.add_argument("--csv", required=True, type=Path, help="Path to a DFO result CSV.")
-    parser.add_argument("--odometry", type=Path, help="Override azimuth_odometry.npz path.")
-    parser.add_argument("--data-root", type=Path, help="Override VTRRDATA Boreas root.")
-    args = parser.parse_args()
-
-    csv_path = args.csv
+def evaluate_csv(csv_path, wrapper_dir, data_root, odometry_override=None):
     if not csv_path.is_file():
         raise FileNotFoundError(f"Result CSV does not exist: {csv_path}")
     output_dir = csv_path.parent / "evaluate_results"
@@ -208,15 +199,11 @@ def main():
     if len(sequence_ids) != 1 or not next(iter(sequence_ids)):
         raise ValueError("Result CSV must contain exactly one sequence_id.")
     sequence_id = next(iter(sequence_ids))
-    wrapper_dir = Path(os.getenv("VTRROOT", Path(__file__).resolve().parents[1]))
-    data_root = args.data_root or os.getenv("VTRRDATA")
-    if data_root is None:
-        raise RuntimeError("VTRRDATA must be set or --data-root must be provided.")
-    data_root = Path(data_root)
-    odometry_path = args.odometry or (
+    odometry_path = odometry_override or (
         wrapper_dir
         / "external"
-        / "wheel_odometry"
+        # / "wheel_odometry"
+        / "dro"
         / "output"
         / sequence_id
         / "odometry_result"
@@ -245,7 +232,40 @@ def main():
         output_dir / "rotation_threshold_stats.csv",
     )
     write_plots(rows, frame_indices, odometry_errors, output_dir)
-    print(f"\nSaved results to {output_dir}")
+    return rows
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Evaluate DFO localization result errors.")
+    parser.add_argument(
+        "--csv", nargs="+", required=True, type=Path, help="Paths to DFO result CSVs."
+    )
+    parser.add_argument("--odometry", type=Path, help="Override azimuth_odometry.npz path.")
+    parser.add_argument("--data-root", type=Path, help="Override VTRRDATA Boreas root.")
+    args = parser.parse_args()
+
+    if args.odometry and len(args.csv) != 1:
+        raise ValueError("--odometry can only be used with one --csv.")
+    output_dirs = [path.resolve().parent / "evaluate_results" for path in args.csv]
+    if len(set(output_dirs)) != len(output_dirs):
+        raise ValueError("Input CSVs must be in different folders to avoid output overwrites.")
+
+    wrapper_dir = Path(os.getenv("VTRROOT", Path(__file__).resolve().parents[1]))
+    data_root = args.data_root or os.getenv("VTRRDATA")
+    if data_root is None:
+        raise RuntimeError("VTRRDATA must be set or --data-root must be provided.")
+
+    all_rows = []
+    for csv_path in args.csv:
+        all_rows.extend(
+            evaluate_csv(
+                csv_path,
+                wrapper_dir,
+                Path(data_root),
+                odometry_override=args.odometry,
+            )
+        )
+    print_collective_rmse(all_rows)
 
 
 if __name__ == "__main__":
