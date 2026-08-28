@@ -93,9 +93,9 @@
           # "gt",
           # "wheel",
           "vertex_test",
+          "submap_test",
           # "mapping",
-          # "scan_to_pointmap" is invoked directly by the pipeline once it
-          # knows a submap will actually be saved, not run every keyframe
+          "scan_to_pointmap",
           "memory",
         ]
 
@@ -107,9 +107,6 @@
           "memory",
         ]
 
-      # submap creation thresholds
-      submap_translation_threshold: 1.5 # in meters
-      submap_rotation_threshold: 30.0 # in degrees
       # save raw pointclouds for training
       # can turn this off for testing
       save_raw_point_cloud: false
@@ -360,10 +357,16 @@
         min_percent_nonzero: 0.3 # percent of pixels above min_int_val_tol to stop blurring
 
       vertex_test:
-        type: radar.vertex_test
+        type: vertex_distance_test
 
         max_translation: 0.3 # translation threshold in meters
         max_rotation: 10.0 # rotation threshold in degrees
+
+      submap_test:
+        type: submap_distance_test
+
+        max_translation: 1.5
+        max_rotation: 30.0
 
       memory:
         type: "live_mem_manager"
