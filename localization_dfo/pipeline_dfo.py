@@ -47,10 +47,6 @@ RESULT_FIELDNAMES = [
     "initial_cost",
     "final_cost",
     "iterations",
-    "optimization_mode",
-    "near_depth_patch_count",
-    "planar_frames_remaining",
-    "optimizer_budget",
     "candidate_x_m",
     "candidate_y_m",
     "candidate_z_m",
@@ -95,10 +91,6 @@ COARSE_TRANSLATION_TARGET_M = 1.0
 COARSE_ROTATION_TARGET_DEG = 3.0
 FINE_TRANSLATION_TARGET_M = 0.01
 FINE_ROTATION_TARGET_DEG = 0.05
-NEAR_DEPTH_M = 3.0
-NEAR_DEPTH_PATCH_COUNT = 3
-PLANAR_HOLD_FRAMES = 10
-PLANAR_DOF_INDICES = (0, 1, 5)
 
 
 def load_radar_translator_model(weights_path, device):
@@ -261,26 +253,6 @@ def calculate_imfil_scales(bounds):
     return max(0, math.ceil(math.log2(coarse_ratio))), max(
         0, math.ceil(math.log2(fine_ratio))
     )
-
-
-def count_near_depth_patches(depth):
-    valid = torch.isfinite(depth) & (depth > 0)
-    patch_min = depth.masked_fill(~valid, torch.inf).amin(dim=(-2, -1))
-    return int((patch_min < NEAR_DEPTH_M).sum().item())
-
-
-def optimizer_dofs_and_budget(near_depth_patch_count, budget, frames_remaining=0):
-    triggered = near_depth_patch_count >= NEAR_DEPTH_PATCH_COUNT
-    if triggered or frames_remaining:
-        next_remaining = PLANAR_HOLD_FRAMES if triggered else frames_remaining - 1
-        return PLANAR_DOF_INDICES, max(1, budget // 2), next_remaining
-    return range(6), budget, 0
-
-
-def expand_optimizer_delta(active_eps, active_dofs):
-    eps = np.zeros(6)
-    eps[list(active_dofs)] = active_eps
-    return eps
 
 
 def pose_gate_diagnostics(observed, initial_prediction, candidate_prediction, eps_best):
@@ -480,7 +452,7 @@ def load_resume_state(csv_path, pose_rows, map_seq, loc_seq, radar_start_frame):
         for last_result in csv.DictReader(f):
             pass
     if last_result is None:
-        return None, "tracking", 0, 0, 0
+        return None, "tracking", 0, 0
 
     previous_frame = loc_seq.radar_frames[radar_start_frame - 1]
     previous_timestamp = previous_frame.timestamp_micro
@@ -521,13 +493,7 @@ def load_resume_state(csv_path, pose_rows, map_seq, loc_seq, radar_start_frame):
     elif state == "recovery" and not rejected and not jump:
         state = "tracking"
     print(f"Resuming after radar frame {radar_start_frame - 1} in {state} state")
-    return (
-        previous_pose,
-        state,
-        consecutive_rejections,
-        0,
-        int(last_result["planar_frames_remaining"]),
-    )
+    return previous_pose, state, consecutive_rejections, 0
 
 
 def load_dro_odometry(path, radar_frames):
@@ -750,7 +716,6 @@ def run_sequence(
         localization_state,
         consecutive_rejections,
         healthy_recovery_accepts,
-        planar_frames_remaining,
     ) = load_resume_state(
         results_csv_path,
         pyboreas_rows,
@@ -808,6 +773,7 @@ def run_sequence(
             noise_scale=0.5,
             output_width=2736,
         )
+        filtered[:, : math.ceil(patch_config["min_range"] / frame.resolution)] = 0.0
         observed = filtered / model.radar_normalization_scale
         if len(observed) != len(transforms):
             raise ValueError(
@@ -893,7 +859,6 @@ def run_sequence(
         initial_prediction = None
         with torch.inference_mode():
             initial_depth = optix_backend.trace(T_init)
-            near_depth_patch_count = count_near_depth_patches(initial_depth)
             if save_init or pose_gating:
                 initial_prediction = torch.sigmoid(
                     model(initial_depth.unsqueeze(1))
@@ -904,10 +869,6 @@ def run_sequence(
         if not model_warmed_up:
             torch.cuda.synchronize(device)
             model_warmed_up = True
-        active_dofs, optimizer_budget, planar_frames_remaining = optimizer_dofs_and_budget(
-            near_depth_patch_count, imfil_budget, planar_frames_remaining
-        )
-        use_2d = active_dofs == PLANAR_DOF_INDICES
         cost_call_timings = []
         lambda_prior = (
             lambda_prior_recovery
@@ -915,8 +876,7 @@ def run_sequence(
             else lambda_prior_tracking
         )
 
-        def cost_fn(active_eps):
-            eps = expand_optimizer_delta(active_eps, active_dofs)
+        def cost_fn(eps):
             cost, timing = compute_optix_cost(
                 optix_backend,
                 left_se3_retract(T=T_init, delta=eps),
@@ -930,7 +890,7 @@ def run_sequence(
             return total_cost
 
         logger = ObjectiveLogger(cost_fn)
-        eps0 = np.zeros(len(active_dofs))
+        eps0 = np.zeros(6)
 
         torch.cuda.reset_peak_memory_stats(device)
         t_opt = perf_counter()
@@ -940,14 +900,12 @@ def run_sequence(
             scale_start=scale_start, scale_depth=scale_depth
         )
         result, _ = run_imfil_direct(
-            "imfil", logger, eps0, bounds[list(active_dofs)], optimizer_budget,
-            imfil_options or None,
+            "imfil", logger, eps0, bounds, imfil_budget, imfil_options or None
         )
         torch.cuda.synchronize(device)
         optimization_time_s = perf_counter() - t_opt
         peak_cuda_memory_mb = torch.cuda.max_memory_allocated(device) / 1024**2
-        active_eps_best, candidate_cost = extract_best_from_result(result, logger)
-        eps_best = expand_optimizer_delta(active_eps_best, active_dofs)
+        eps_best, candidate_cost = extract_best_from_result(result, logger)
         candidate_prior_penalty = float(
             lambda_prior * np.sum((eps_best / sigma_prior) ** 2)
         )
@@ -1069,10 +1027,6 @@ def run_sequence(
                 candidate_cost,
                 gate_fields,
                 {
-                    "optimization_mode": "2d" if use_2d else "3d",
-                    "near_depth_patch_count": near_depth_patch_count,
-                    "planar_frames_remaining": planar_frames_remaining,
-                    "optimizer_budget": optimizer_budget,
                     "optimization_time_s": optimization_time_s,
                     "model_inference_time_s": sum(
                         timing["model_inference_time_s"] for timing in cost_call_timings
@@ -1152,6 +1106,7 @@ def main():
     parser.add_argument("--radar-start-frame", type=int, default=0)
     parser.add_argument("--radar-end-frame", type=int, default=None)
     parser.add_argument("--imfil-budget", type=int, default=60)
+    parser.add_argument("--min-range-m", type=float, default=5.0)
     parser.add_argument("--imfil-function-delta", type=float)
     parser.add_argument("--imfil-stencil-delta", type=float)
     parser.add_argument("--save-predictions", action="store_true")
@@ -1172,6 +1127,8 @@ def main():
 
     if args.imfil_budget < 1:
         raise ValueError("--imfil-budget must be positive.")
+    if not np.isfinite(args.min_range_m) or args.min_range_m < 0:
+        raise ValueError("--min-range-m must be finite and non-negative.")
     for name in ("imfil_function_delta", "imfil_stencil_delta"):
         value = getattr(args, name)
         if value is not None and value <= 0:
@@ -1223,7 +1180,7 @@ def main():
     patch_config = build_patch_config(
         fov_deg=6.0,
         res_deg=0.1,
-        min_range=0.0,
+        min_range=args.min_range_m,
         max_uv_edge_length=None,
         max_depth_jump=2.0,
     )

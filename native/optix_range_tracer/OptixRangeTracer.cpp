@@ -56,6 +56,8 @@ OptixRangeTracer::OptixRangeTracer(const GeometryConfig& geometry)
     if (!(geometry.thetaMinDegrees < geometry.thetaMaxDegrees) ||
         !(geometry.phiMinDegrees < geometry.phiMaxDegrees))
         throw std::invalid_argument("Patch angle minima must be below maxima");
+    if (!std::isfinite(geometry.minRangeMeters) || geometry.minRangeMeters < 0.0f)
+        throw std::invalid_argument("Minimum range must be finite and non-negative");
 
     try
     {
@@ -449,6 +451,7 @@ void OptixRangeTracer::launch(const RigidTransform& currentTransform,
     params.patchWidth = static_cast<unsigned int>(m_geometry.width);
     params.patchHeight = static_cast<unsigned int>(m_geometry.height);
     params.poseCount = static_cast<unsigned int>(m_poseCount);
+    params.minRangeMeters = m_geometry.minRangeMeters;
     params.handle = m_gasHandle;
 
     CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void*>(m_dParams), &params,

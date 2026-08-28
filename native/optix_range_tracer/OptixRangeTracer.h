@@ -19,6 +19,7 @@ struct GeometryConfig
     float thetaMaxDegrees = 3.0f;
     float phiMinDegrees = -3.0f;
     float phiMaxDegrees = 3.0f;
+    float minRangeMeters = 0.0f;
 };
 
 // Row-major rotation for p_destination = R * p_source + translation.
@@ -41,6 +42,7 @@ struct Params
     unsigned int patchWidth;
     unsigned int patchHeight;
     unsigned int poseCount;
+    float minRangeMeters;
     OptixTraversableHandle handle;
 };
 

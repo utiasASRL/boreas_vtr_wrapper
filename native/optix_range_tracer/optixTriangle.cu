@@ -65,7 +65,7 @@ extern "C" __global__ void __raygen__rg()
 
     unsigned int payload;
     optixTrace(params.handle, rayOrigin, rayDirection,
-               0.0f, 1.0e16f, 0.0f, OptixVisibilityMask(255),
+               params.minRangeMeters, 1.0e16f, 0.0f, OptixVisibilityMask(255),
                OPTIX_RAY_FLAG_NONE, 0, RAY_TYPE_COUNT, RAY_TYPE_RANGE, payload);
 
     const unsigned long long output =

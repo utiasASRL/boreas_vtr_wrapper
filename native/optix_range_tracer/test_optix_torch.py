@@ -94,6 +94,20 @@ assert hit_count == 1225
 assert abs(minimum - 10.0) < 1.0e-3
 assert abs(maximum - 10.0088) < 1.0e-3
 
+near_vertices = vertices.clone()
+near_vertices[:, 0] = 3.0
+far_vertices = vertices.clone()
+far_vertices[:, 0] = 20.0
+layered_vertices = torch.cat((near_vertices, far_vertices))
+layered_triangles = torch.cat((triangles, triangles + 4))
+filtered_tracer = optix_range_tracer.OptixRangeTracer(min_range=5.0)
+filtered_tracer.set_scan(identity.unsqueeze(0), torch.zeros(1, device=device))
+filtered_tracer.set_mesh(near_vertices, triangles)
+assert filtered_tracer.trace(identity)[0, 30, 30].item() == 0.0
+filtered_tracer.set_mesh(layered_vertices, layered_triangles)
+assert abs(filtered_tracer.trace(identity)[0, 30, 30].item() - 20.0) < 1.0e-3
+print("validation passed: minimum range skips near surfaces")
+
 test_stream = torch.cuda.Stream(device=device)
 with torch.cuda.stream(test_stream):
     streamed_depth = tracer.trace(identity)

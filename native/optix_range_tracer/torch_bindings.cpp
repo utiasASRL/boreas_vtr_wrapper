@@ -34,7 +34,8 @@ class TorchOptixRangeTracer
 public:
     TorchOptixRangeTracer(int width, int height,
                           float thetaMin, float thetaMax,
-                          float phiMin, float phiMax)
+                          float phiMin, float phiMax,
+                          float minRange)
         : m_deviceIndex(c10::cuda::current_device())
     {
         c10::cuda::CUDAGuard guard(m_deviceIndex);
@@ -45,6 +46,7 @@ public:
         geometry.thetaMaxDegrees = thetaMax;
         geometry.phiMinDegrees = phiMin;
         geometry.phiMaxDegrees = phiMax;
+        geometry.minRangeMeters = minRange;
         m_tracer = std::make_unique<OptixRangeTracer>(geometry);
     }
 
@@ -151,13 +153,14 @@ PYBIND11_MODULE(optix_range_tracer, module)
 {
     module.doc() = "PyTorch binding for the OptiX batched range tracer";
     py::class_<TorchOptixRangeTracer>(module, "OptixRangeTracer")
-        .def(py::init<int, int, float, float, float, float>(),
+        .def(py::init<int, int, float, float, float, float, float>(),
              py::arg("width") = 61,
              py::arg("height") = 61,
              py::arg("theta_min") = -3.0f,
              py::arg("theta_max") = 3.0f,
              py::arg("phi_min") = -3.0f,
              py::arg("phi_max") = 3.0f,
+             py::arg("min_range") = 0.0f,
              "Angles are specified in degrees; the tracer is tied to the current CUDA device.")
         .def("set_mesh", &TorchOptixRangeTracer::setMesh,
              "Copy CUDA vertices and int32 triangle indices into tracer-owned buffers.")

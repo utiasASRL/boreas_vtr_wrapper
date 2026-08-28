@@ -35,6 +35,7 @@ class OptixDepthBackend:
                 theta_max=float(np.rad2deg(patch_config["theta_max"])),
                 phi_min=float(np.rad2deg(patch_config["phi_min"])),
                 phi_max=float(np.rad2deg(patch_config["phi_max"])),
+                min_range=float(patch_config["min_range"]),
             )
 
     def set_mesh(self, vertices, triangles):
