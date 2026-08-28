@@ -222,16 +222,12 @@
 
         direct:
           local_map_res: 0.1
-          local_map_update_alpha: 0.1
+          local_map_update_alpha: 0.25
           max_local_map_range: 100.0
           max_range: 70.0
           min_range: 4.0
-          # Blurring of DRO's local map, only for downstream (mapping, DRL) consumption
+          # Fixed blurring of DRO's local map
           gauss_blur_sigma: 3.0 # pixels, kernel size is (ceil(6 * sigma) | 1)
-          adaptive_blur: false # raise sigma until min_percent_nonzero of the scan is non-zero
-          max_blur_sigma: 15.0 # max sigma for adaptive blur
-          min_int_val_tol: 0.5 # min intensity value to consider a pixel non-zero
-          min_percent_nonzero: 0.3 # percent of pixels above min_int_val_tol to stop blurring
         doppler:
           min_range: 4.0
           max_range: 200.0
@@ -243,7 +239,7 @@
             0.0, 0.0, 0.0, 1.0,
           ]
           estimate_vy_bias: true
-          estimate_gyro_bias: false
+          estimate_gyro_bias: true
           use_gyro: true
           vy_bias_prior: 0.11
           min_time_bias_init: 1.0
@@ -361,6 +357,14 @@
         type: radar.scan_to_pointmap
         map_resolution: 1.0 # submap voxel size in meters
 
+        # Additional blurring on top of DRO's fixed gauss_blur_sigma blur,
+        # applied only when building the submap (not for drl/localization)
+        adaptive_blur: false # repeatedly re-blur until min_percent_nonzero of the scan is non-zero
+        blur_sigma_step: 3.0 # fixed sigma applied on each re-blur pass
+        max_num_reblur: 5 # cap on the number of re-blur passes
+        min_int_val_tol: 0.5 # min intensity value to consider a pixel non-zero
+        min_percent_nonzero: 0.3 # percent of pixels above min_int_val_tol to stop blurring
+
       vertex_test:
         type: radar.vertex_test
 
@@ -412,12 +416,11 @@
         max_iterations: 25
         convergence_tol: 1.0e-4
         alpha: 1.0          # Gauss-Newton step size
-        max_dist: 100.0     # radius (m) around the initial guess to query map voxels (<=0 uses all)
         meas_std: 0.1       # intensity measurement noise std-dev (normalised [0,1] scale)
         range_factor: 0.0005   # adds range-dependent intensity uncertainty
         num_threads: 8
 
-        use_pose_prior: true
+        use_pose_prior: false
         prior_cov_diag: [1e1, 1e1, 1e1]
 
       memory:

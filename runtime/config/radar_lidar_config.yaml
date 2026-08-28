@@ -33,6 +33,7 @@
       imu:
         use_imu: true
         imu_name: "dmu" # options are "dmu", "aeva", or "imu" (for applanix imu)
+        force_wrap: false # if true, fabricate a bracketing IMU sample from the nearest real one when a scan can't be fully wrapped (e.g. at the start/end of a sequence)
       wheel_encoder:
         use_wheel_encoder: false
         encoder_max: 16777216 # 2^24
