@@ -1,10 +1,10 @@
 import argparse
 import csv
 import gc
+import math
 import os
 from pathlib import Path
 from time import perf_counter
-import math
 
 import cv2
 import numpy as np
@@ -13,7 +13,7 @@ from pyboreas import BoreasDataset
 from pyboreas.utils.odometry import interpolate_poses
 from pyboreas.utils.utils import get_inverse_tf
 from scipy.interpolate import interp1d
-from scipy.ndimage import gaussian_filter1d, maximum_filter1d, shift
+from scipy.ndimage import shift
 
 from localization_dfo.io_utils import (
     build_T_lidar_robot,
@@ -103,6 +103,14 @@ def make_perturbations():
 def load_radar_translator_model(weights_path, device):
     model = RadarTranslatorCNN().to(device)
     checkpoint = torch.load(weights_path, map_location=device)
+    if not isinstance(checkpoint, dict) or "radar_normalization_scale" not in checkpoint:
+        raise ValueError(
+            f"Checkpoint {weights_path} has no radar_normalization_scale metadata. "
+            "Convert the legacy checkpoint before evaluation."
+        )
+    normalization_scale = float(checkpoint["radar_normalization_scale"])
+    if not np.isfinite(normalization_scale) or normalization_scale <= 0:
+        raise ValueError(f"Invalid radar_normalization_scale: {normalization_scale}")
     if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
         state_dict = checkpoint["model_state_dict"]
     elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
@@ -112,124 +120,15 @@ def load_radar_translator_model(weights_path, device):
     if isinstance(state_dict, dict) and any(key.startswith("module.") for key in state_dict):
         state_dict = {key.removeprefix("module."): value for key, value in state_dict.items()}
     model.load_state_dict(state_dict)
+    model.radar_normalization_scale = normalization_scale
     model.eval()
     return model
 
 
-def cauchy_loss(residual, c=0.1):
-    """
-    Cauchy robust loss.
-
-    residual: numpy array
-    c: robust scale parameter, in the same units as residual intensity
-
-    rho(r) = 0.5 * c^2 * log(1 + (r / c)^2)
-    """
-    r_scaled = residual / c
-    return 0.5 * (c ** 2) * np.log1p(r_scaled ** 2)
-
-
-def robust_cost(residual, loss="mse", cauchy_c=0.1):
-    if loss == "mse":
-        return 0.5 * residual ** 2
-    if loss == "cauchy":
-        return cauchy_loss(residual, c=cauchy_c)
-    raise ValueError(f"Unknown loss: {loss}")
-
-
-def gaussian_kernel_1d(window_size=25, sigma=3.0):
-    x = np.arange(window_size, dtype=np.float32) - window_size // 2
-    kernel = np.exp(-(x ** 2) / (2.0 * sigma ** 2))
-    return kernel / kernel.max()
-
-
-def depth_patch_to_waveform(
-    depth_patch,
-    resolution=0.04381,
-    bins=6848,
-    window_size=25,
-    sigma=3.0,
-):
-    waveform = np.zeros(bins, dtype=np.float32)
-    nonzero_depths = depth_patch[np.isfinite(depth_patch) & (depth_patch != 0.0)]
-    if nonzero_depths.size == 0:
-        return waveform
-
-    indices = np.round(nonzero_depths / resolution).astype(np.int64)
-    valid_indices = indices[(indices >= 0) & (indices < bins)]
-    if valid_indices.size == 0:
-        return waveform
-
-    waveform[valid_indices] = 1.0
-    kernel = gaussian_kernel_1d(window_size=window_size, sigma=sigma)
-    smoothed = np.convolve(waveform, kernel, mode="same")
-    return np.clip(smoothed, 0.0, 1.0).astype(np.float32, copy=False)
-
-
-def build_covisibility_mask(
-    lidar_waveforms,
-    radar_waveforms,
-    window_size=9,
-    lidar_threshold=1e-2,
-    radar_threshold=1e-2,
-):
-    lidar_mask = lidar_waveforms > lidar_threshold
-    radar_mask = radar_waveforms > radar_threshold
-    positive_centers = lidar_mask & radar_mask
-
-    roi_mask = maximum_filter1d(
-        positive_centers.astype(np.uint8),
-        size=window_size,
-        axis=1,
-        mode="constant",
-        cval=0,
-    ).astype(bool)
-
-    return roi_mask, positive_centers
-
-
-def compute_covisibility_cost(
-    preds_np,
-    obs_cropped,
-    lidar_waveforms,
-    window_size=9,
-    lidar_threshold=1e-2,
-    radar_threshold=1e-2,
-    loss="mse",
-    cauchy_c=0.1
-):
-    pred_cropped = preds_np[:, :obs_cropped.shape[1]]
-    lidar_cropped = lidar_waveforms[:, :obs_cropped.shape[1]]
-    roi_mask, positive_centers = build_covisibility_mask(
-        lidar_waveforms=lidar_cropped,
-        radar_waveforms=obs_cropped,
-        window_size=window_size,
-        lidar_threshold=lidar_threshold,
-        radar_threshold=radar_threshold,
-    )
-
-    active_bins = int(np.count_nonzero(roi_mask))
-    positive_bins = int(np.count_nonzero(positive_centers))
-    if active_bins == 0:
-        return float("inf"), roi_mask, {
-            "active_roi_bins": active_bins,
-            "positive_center_bins": positive_bins,
-        }
-
-    residual = pred_cropped - obs_cropped
-    cost = float(np.mean(robust_cost(residual[roi_mask], loss=loss, cauchy_c=cauchy_c)))
-    stats = {
-        "active_roi_bins": active_bins,
-        "positive_center_bins": positive_bins,
-    }
-    return cost, roi_mask, stats
-
-
-def compute_plain_cost(preds_np, obs_cropped, loss, cauchy_c):
+def compute_cost(preds_np, obs_cropped):
     pred_cropped = preds_np[:, :obs_cropped.shape[1]]
     residual = pred_cropped - obs_cropped
-    cost = float(np.mean(robust_cost(residual, loss=loss, cauchy_c=cauchy_c)))
-    return cost
+    return float(np.mean(0.5 * residual ** 2))
 
 
 def print_sorted_costs(csv_path):
@@ -251,7 +150,6 @@ def predict_polar_optix(
 
     num_azimuths = depth_patches.shape[0]
     preds_np = np.zeros((num_azimuths, target_bins), dtype=np.float32)
-    lidar_waveforms = np.zeros((num_azimuths, target_bins), dtype=np.float32)
     with torch.no_grad():
         for start in range(0, num_azimuths, batch_size):
             stop = min(start + batch_size, num_azimuths)
@@ -260,15 +158,12 @@ def predict_polar_optix(
 
     depth_np = depth_patches.cpu().numpy()
     hit_counts = np.count_nonzero(depth_np > 0.0, axis=(1, 2))
-    for row, depth_patch in enumerate(depth_np):
-        lidar_waveforms[row] = depth_patch_to_waveform(depth_patch, bins=target_bins)
-
     stats = {
         "avg_hit_pixels": float(np.mean(hit_counts)),
         "min_hit_pixels": int(np.min(hit_counts)),
         "max_hit_pixels": int(np.max(hit_counts)),
     }
-    return preds_np, lidar_waveforms, stats
+    return preds_np, stats
 
 
 def save_debug_images_if_better(
@@ -278,7 +173,7 @@ def save_debug_images_if_better(
     perturbation_dir,
     radar_frame,
     filtered_polar,
-    norm_factor,
+    normalization_scale,
     preds_np,
     diff,
 ):
@@ -302,7 +197,7 @@ def save_debug_images_if_better(
             )
             diff_img = (cart_diff * 255.0).astype(np.uint8)
 
-            radar_frame.polar = filtered_polar / norm_factor
+            radar_frame.polar = filtered_polar / normalization_scale
             cart_gt = radar_frame.polar_to_cart(
                 cart_resolution=0.2384,
                 cart_pixel_width=1000,
@@ -341,10 +236,6 @@ def run_sequence(
     mesh_root,
     output_dir,
     batch_size=32,
-    use_covisibility=False,
-    use_gaussian_blur=False,
-    loss="mse",
-    cauchy_c=0.1
 ):
     print(f"Map SequenceID: {map_seq.ID}")
     print(f"Localization SequenceID: {loc_seq.ID}")
@@ -419,19 +310,9 @@ def run_sequence(
             noise_scale=0.5,
         )
         filtered_polar[:, : math.ceil(patch_config["min_range"] / radar_frame.resolution)] = 0.0
-        if use_gaussian_blur:
-            filtered_polar = gaussian_filter1d(
-                filtered_polar,
-                sigma=30.0,
-                axis=1,
-                mode="reflect",
-            )
 
         target_bins = filtered_polar.shape[1]
         output_bins = 2736
-        covis_window_size = 15
-        lidar_threshold = 5e-2
-        radar_threshold = 5e-2
 
         obs_padded = filtered_polar / model.radar_normalization_scale
         obs_cropped = obs_padded[:, :output_bins]
@@ -449,7 +330,7 @@ def run_sequence(
             # the radar pose.
             T_perturbed = np.linalg.inv(perturb["delta_T"]) @ T_gt
 
-            preds_np, lidar_waveforms, patch_stats = predict_polar_optix(
+            preds_np, patch_stats = predict_polar_optix(
                 tracer=tracer,
                 T_radar_enu=T_perturbed,
                 model=model,
@@ -457,27 +338,9 @@ def run_sequence(
                 target_bins=target_bins,
             )
 
-            if use_covisibility:
-                cost, roi_mask, cost_stats = compute_covisibility_cost(
-                    preds_np=preds_np,
-                    obs_cropped=obs_cropped,
-                    lidar_waveforms=lidar_waveforms,
-                    window_size=covis_window_size,
-                    lidar_threshold=lidar_threshold,
-                    radar_threshold=radar_threshold,
-                    loss=loss,
-                    cauchy_c=cauchy_c
-                )
-            else:
-                cost = compute_plain_cost(preds_np, obs_cropped, loss, cauchy_c)
-                roi_mask = np.ones_like(obs_cropped, dtype=bool)
-                cost_stats = {
-                    "active_roi_bins": int(np.count_nonzero(roi_mask)),
-                    "positive_center_bins": 0,
-                }
+            cost = compute_cost(preds_np, obs_cropped)
 
             diff = np.abs(preds_np - obs_padded)
-            diff[:, :output_bins] *= roi_mask
             diff[:, output_bins:] = 0.0
 
             gt_cost = save_debug_images_if_better(
@@ -487,7 +350,7 @@ def run_sequence(
                 perturbation_dir=str(perturbation_dir),
                 radar_frame=radar_frame,
                 filtered_polar=filtered_polar,
-                norm_factor=norm_factor,
+                normalization_scale=model.radar_normalization_scale,
                 preds_np=preds_np,
                 diff=diff,
             )
@@ -495,13 +358,11 @@ def run_sequence(
             write_to_csv(str(csv_path), perturb, cost)
             print(
                 f"{perturb['name']}: cost={cost:.6e} | "
-                f"roi bins={cost_stats['active_roi_bins']} | "
-                f"positive bins={cost_stats['positive_center_bins']} | "
                 f"avg hits={patch_stats['avg_hit_pixels']:.1f} | "
                 f"time={perf_counter() - t_pert:.3f}s | saved csv"
             )
 
-            del preds_np, lidar_waveforms, roi_mask, diff
+            del preds_np, diff
             gc.collect()
 
         print_sorted_costs(csv_path)
@@ -521,17 +382,15 @@ def main():
     parser.add_argument("--loc-sequence", required=True)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--device", default="cuda:3" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--covisibility", action="store_true")
-    parser.add_argument("--gaussian-blur", action="store_true")
+    parser.add_argument("--min-range-m", type=float, default=7.0)
     parser.add_argument("--mesh-root", type=Path, default=None)
     parser.add_argument("--model-weights", type=Path, default=None)
-    parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--loss", choices=["mse", "cauchy"], default="mse")
-    parser.add_argument("--cauchy-c", type=float, default=0.1)
     args = parser.parse_args()
 
     if args.batch_size < 1:
         raise ValueError("--batch-size must be at least 1.")
+    if not np.isfinite(args.min_range_m) or args.min_range_m < 0:
+        raise ValueError("--min-range-m must be finite and non-negative.")
 
     boreas_vtr_wrapper_dir = os.getenv("VTRROOT")
     boreas_data = os.getenv("VTRRDATA")
@@ -545,23 +404,16 @@ def main():
         raise RuntimeError("The OptiX perturbation test requires a CUDA device.")
 
     lidar_results_dir = os.path.join(boreas_vtr_wrapper_dir, "results/lidar")
-    weights_path = os.path.join(
-            boreas_vtr_wrapper_dir,
-            # "model_dev/route_weights/1-suburb/best_total.pth",
-            # "model_dev/route_weights/1-farm/best_total.pth",
-            "model_dev/route_weights/1-suburb-industrial-farm/best_total.pth",
-        )
+    weights_path = args.model_weights or (
+        Path(boreas_vtr_wrapper_dir)
+        / "model_dev"
+        / "route_weights"
+        / "1-suburb-industrial-farm"
+        / "best_total.pth"
+    )
     mesh_root = args.mesh_root or (
         Path(boreas_vtr_wrapper_dir) / "postprocessing" / "submap_meshes"
     )
-    if args.output_dir is None:
-        output_dir = (
-            Path("perturbation_cost_tests")
-            / f"optix_loss_{args.loss}_cauchy_{args.cauchy_c}_covis_{int(args.covisibility)}_blur_{int(args.gaussian_blur)}"
-        )
-    else:
-        output_dir = Path("perturbation_cost_tests") / f"{args.output_dir}"
-
     bd = BoreasDataset(
         boreas_data,
         [[sequence_id] for sequence_id in dict.fromkeys((args.map_sequence, args.loc_sequence))],
@@ -573,7 +425,7 @@ def main():
     patch_config = build_patch_config(
         fov_deg=fov_deg,
         res_deg=res_deg,
-        min_range=0.0,
+        min_range=args.min_range_m,
         max_uv_edge_length=None,
         max_depth_jump=2.0,
     )
@@ -581,7 +433,7 @@ def main():
 
     map_seq = bd.get_seq_from_ID(args.map_sequence)
     loc_seq = bd.get_seq_from_ID(args.loc_sequence)
-    output_dir = output_dir / loc_seq.ID
+    output_dir = Path("perturbation_cost_tests") / loc_seq.ID
     run_sequence(
         map_seq=map_seq,
         loc_seq=loc_seq,
@@ -594,10 +446,6 @@ def main():
         mesh_root=mesh_root,
         output_dir=output_dir,
         batch_size=args.batch_size,
-        use_covisibility=args.covisibility,
-        use_gaussian_blur=args.gaussian_blur,
-        loss=args.loss,
-        cauchy_c=args.cauchy_c
     )
 
 
