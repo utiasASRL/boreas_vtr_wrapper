@@ -83,7 +83,7 @@ RESULT_FIELDNAMES = [
 ]
 
 TRANSLATION_JUMP_M = 0.20
-ROTATION_JUMP_DEG = 0.50
+ROTATION_JUMP_DEG = 0.50 # 3D odometry
 MISSING_OBSERVED_EVIDENCE_FRACTION = 0.60
 SUBMAP_SEARCH_RADIUS = 5
 SUBMAP_SEARCH_MAX_RADIUS = 20
@@ -977,14 +977,15 @@ def run_sequence(
             save_cartesian_radar_image(
                 radar_frame,
                 padded_init,
-                image_root / "init_predictions" / f"{radar_frame.frame}.png",
+                # image_root / "init_predictions" / f"{radar_frame.frame}.png",
+                image_root / "init_predictions" / f"{radar_frame_idx}.png",
             )
         if save_labels:
             save_cartesian_radar_image(
                 radar_frame,
                 filtered_polar / model.radar_normalization_scale,
-                image_root / "labels" / f"{radar_frame.frame}.png",
-                # image_root / "labels" / f"{radar_frame_idx}.png",
+                # image_root / "labels" / f"{radar_frame.frame}.png",
+                image_root / "labels" / f"{radar_frame_idx}.png",
             )
         if save_predictions:
             predictions = accepted_prediction
@@ -1000,8 +1001,8 @@ def run_sequence(
             save_cartesian_radar_image(
                 radar_frame,
                 padded_predictions,
-                image_root / "predictions" / f"{radar_frame.frame}.png",
-                # image_root / "predictions" / f"{radar_frame_idx}.png",
+                # image_root / "predictions" / f"{radar_frame.frame}.png",
+                image_root / "predictions" / f"{radar_frame_idx}.png",
             )
         image_save_time_s = perf_counter() - image_save_start
 
@@ -1089,7 +1090,8 @@ def resolve_dro_odometry_paths(wrapper_dir, sequence_ids, override=None):
     if override and len(sequence_ids) != 1:
         raise ValueError("--dro-odometry can only be used with one --loc-sequence.")
     # output_root = Path(wrapper_dir) / "external" / "wheel_odometry" / "output"
-    output_root = Path(wrapper_dir) / "external" / "dro" / "output"
+    # output_root = Path(wrapper_dir) / "external" / "dro" / "output"
+    output_root = Path(wrapper_dir) / "external" / "dro" / "output_2d"
     return sequence_ids, {
         sequence_id: override
         or output_root / sequence_id / "odometry_result" / "azimuth_odometry.npz"
@@ -1106,7 +1108,7 @@ def main():
     parser.add_argument("--radar-start-frame", type=int, default=0)
     parser.add_argument("--radar-end-frame", type=int, default=None)
     parser.add_argument("--imfil-budget", type=int, default=60)
-    parser.add_argument("--min-range-m", type=float, default=5.0)
+    parser.add_argument("--min-range-m", type=float, default=7.0)
     parser.add_argument("--imfil-function-delta", type=float)
     parser.add_argument("--imfil-stencil-delta", type=float)
     parser.add_argument("--save-predictions", action="store_true")
@@ -1191,7 +1193,7 @@ def main():
     # lambda_prior_tracking = 0
     # lambda_prior_recovery = 0
     # sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 0.075, 0.050, 0.05, 0.15, 0.15, 0.05 # OG3 best values
-    sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 0.2, 0.2, 0.2, 3.0, 3.0, 0.1
+    sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 0.5, 0.2, 0.1, 1.0, 1.0, 0.01
     # sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 1000.0, 1000.0, 0.3, 3.0, 3.0, 0.1
     
     sigma_prior = np.array([

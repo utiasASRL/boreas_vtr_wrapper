@@ -204,7 +204,8 @@ def evaluate_csv(csv_path, wrapper_dir, data_root, odometry_override=None):
         / "external"
         # / "wheel_odometry"
         / "dro"
-        / "output"
+        # / "output"
+        / "output_2d"
         / sequence_id
         / "odometry_result"
         / "azimuth_odometry.npz"

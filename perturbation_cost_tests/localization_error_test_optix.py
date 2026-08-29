@@ -4,6 +4,7 @@ import gc
 import os
 from pathlib import Path
 from time import perf_counter
+import math
 
 import cv2
 import numpy as np
@@ -71,8 +72,8 @@ def make_perturbations():
         # "x": np.linspace(-0.3, 0.3, 601),
         # "y": np.linspace(-0.3, 0.3, 601),
         # "z": np.linspace(-0.3, 0.3, 601),
-        # "x": np.linspace(-0.2, 0.2, 41),
-        # "y": np.linspace(-0.2, 0.2, 41),
+        "x": np.linspace(-2.0, 2.0, 41),
+        "y": np.linspace(-2.0, 2.0, 41),
         "z": np.linspace(-1.0, 1.0, 21),
         # "x": [0.0],
         # "y": [0.0],
@@ -86,9 +87,9 @@ def make_perturbations():
         # "roll": np.linspace(-2.0, 2.0, 401),
         # "pitch": np.linspace(-2.0, 2.0, 401),
         # "yaw": np.linspace(-2.0, 2.0, 401),
-        "roll": np.linspace(-3.0, 3.0, 21),
-        "pitch": np.linspace(-3.0, 3.0, 21),
-        # "yaw": np.linspace(-2.0, 2.0, 41),
+        "roll": np.linspace(-3.0, 3.0, 61),
+        "pitch": np.linspace(-3.0, 3.0, 61),
+        "yaw": np.linspace(-3.0, 3.0, 61),
     }
 
     return generate_delta_transforms(
@@ -417,6 +418,7 @@ def run_sequence(
             z_q=2.5,
             noise_scale=0.5,
         )
+        filtered_polar[:, : math.ceil(patch_config["min_range"] / radar_frame.resolution)] = 0.0
         if use_gaussian_blur:
             filtered_polar = gaussian_filter1d(
                 filtered_polar,
@@ -425,14 +427,13 @@ def run_sequence(
                 mode="reflect",
             )
 
-        norm_factor = 0.5172
         target_bins = filtered_polar.shape[1]
         output_bins = 2736
         covis_window_size = 15
         lidar_threshold = 5e-2
         radar_threshold = 5e-2
 
-        obs_padded = filtered_polar / norm_factor
+        obs_padded = filtered_polar / model.radar_normalization_scale
         obs_cropped = obs_padded[:, :output_bins]
 
         perturbation_dir = Path(output_dir)
@@ -507,14 +508,14 @@ def run_sequence(
 
         radar_frame.unload_data()
         print(f"radar frame unloaded! elapsed={perf_counter() - t0:.3f}s")
-        radar_frame_idx += 2
+        radar_frame_idx += 1
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Plot perturbation costs using cached NKSR meshes and OptiX ray tracing."
     )
-    parser.add_argument("--radar-start-frame", type=int, default=2625)
+    parser.add_argument("--radar-start-frame", type=int, default=1)
     parser.add_argument("--radar-end-frame", type=int, default=None)
     parser.add_argument("--map-sequence", required=True)
     parser.add_argument("--loc-sequence", required=True)
@@ -547,7 +548,8 @@ def main():
     weights_path = os.path.join(
             boreas_vtr_wrapper_dir,
             # "model_dev/route_weights/1-suburb/best_total.pth",
-            "model_dev/route_weights/1-farm/best_total.pth",
+            # "model_dev/route_weights/1-farm/best_total.pth",
+            "model_dev/route_weights/1-suburb-industrial-farm/best_total.pth",
         )
     mesh_root = args.mesh_root or (
         Path(boreas_vtr_wrapper_dir) / "postprocessing" / "submap_meshes"
