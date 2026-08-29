@@ -127,8 +127,8 @@ def load_odometry_errors(rows, odometry_path, gt_path):
         frame_transforms = data["frame_transforms"]
         convention = data["odom_transform_convention"].item()
 
-    if convention != "right":
-        raise ValueError("Odometry must use the right transform convention.")
+    if convention != "left":
+        raise ValueError("Odometry must use the left intraframe transform convention.")
     if not np.array_equal(frame_times, gt_times):
         raise ValueError("Odometry and GT radar timestamps differ.")
     if frame_transforms.shape != (len(frame_times), 4, 4):

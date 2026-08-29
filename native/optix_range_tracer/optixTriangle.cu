@@ -41,13 +41,13 @@ extern "C" __global__ void __raygen__rg()
         : params.currentTransform;
     const RigidTransform odom = loadTransform(params.odomMatrices + idx.z * 16);
 
-    // Compose T_reference_from_enu = T_current * T_odom.
-    RigidTransform referenceFromEnu;
-    referenceFromEnu.row0 = multiplyTranspose(odom, current.row0);
-    referenceFromEnu.row1 = multiplyTranspose(odom, current.row1);
-    referenceFromEnu.row2 = multiplyTranspose(odom, current.row2);
-    referenceFromEnu.translation =
-        multiplyRows(current, odom.translation) + current.translation;
+    // Compose T_azimuth_from_enu = T_odom * T_current.
+    RigidTransform azimuthFromEnu;
+    azimuthFromEnu.row0 = multiplyTranspose(current, odom.row0);
+    azimuthFromEnu.row1 = multiplyTranspose(current, odom.row1);
+    azimuthFromEnu.row2 = multiplyTranspose(current, odom.row2);
+    azimuthFromEnu.translation =
+        multiplyRows(odom, current.translation) + odom.translation;
 
     // Invert the Python point-coordinate azimuth rotation for ray directions.
     const float azimuth = params.radarAzimuths[idx.z];
@@ -59,9 +59,9 @@ extern "C" __global__ void __raygen__rg()
         sine * local.x + cosine * local.y,
         local.z);
 
-    // p_reference = R p_enu + t, hence o_enu = -R^T t and d_enu = R^T d_reference.
-    const float3 rayOrigin = -multiplyTranspose(referenceFromEnu, referenceFromEnu.translation);
-    const float3 rayDirection = normalize(multiplyTranspose(referenceFromEnu, directionReference));
+    // p_azimuth = R p_enu + t, hence o_enu = -R^T t and d_enu = R^T d_azimuth.
+    const float3 rayOrigin = -multiplyTranspose(azimuthFromEnu, azimuthFromEnu.translation);
+    const float3 rayDirection = normalize(multiplyTranspose(azimuthFromEnu, directionReference));
 
     unsigned int payload;
     optixTrace(params.handle, rayOrigin, rayDirection,

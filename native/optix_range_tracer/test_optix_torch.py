@@ -108,6 +108,31 @@ filtered_tracer.set_mesh(layered_vertices, layered_triangles)
 assert abs(filtered_tracer.trace(identity)[0, 30, 30].item() - 20.0) < 1.0e-3
 print("validation passed: minimum range skips near surfaces")
 
+composition_vertices = torch.tensor(
+    [
+        [-4.0, -10.0, -0.3],
+        [-4.0, -10.0, 0.3],
+        [4.0, -10.0, 0.3],
+        [4.0, -10.0, -0.3],
+    ],
+    dtype=torch.float32,
+    device=device,
+)
+current = identity.clone()
+current[0, 3] = 2.0
+left_increment = identity.clone()
+left_increment[:2, :2] = torch.tensor(
+    [[0.0, -1.0], [1.0, 0.0]], dtype=torch.float32, device=device
+)
+composition_tracer = optix_range_tracer.OptixRangeTracer()
+composition_tracer.set_mesh(composition_vertices, triangles)
+composition_tracer.set_scan(
+    left_increment.unsqueeze(0), torch.zeros(1, device=device)
+)
+composition_center = composition_tracer.trace(current)[0, 30, 30].item()
+assert abs(composition_center - 10.0) < 1.0e-3
+print("validation passed: left-side odometry composition")
+
 test_stream = torch.cuda.Stream(device=device)
 with torch.cuda.stream(test_stream):
     streamed_depth = tracer.trace(identity)

@@ -523,8 +523,11 @@ def load_dro_odometry(path, radar_frames):
     frame_body_velocities = result["frame_body_velocities"]
     velocity_start_us = result["velocity_start_us"]
     velocity_end_us = result["velocity_end_us"]
-    if result["odom_transform_convention"].item() != "right":
-        raise ValueError("DRO NPZ does not contain right-side pipeline odometry transforms.")
+    if result["odom_transform_convention"].item() != "left":
+        raise ValueError(
+            "DRO NPZ does not contain left-side intraframe transforms; rerun the "
+            "odometry pipeline."
+        )
     expected_times = np.asarray(
         [frame.timestamp_micro for frame in radar_frames], dtype=np.int64
     )
@@ -552,6 +555,16 @@ def load_dro_odometry(path, radar_frames):
         velocity_end_us, expected_end_us
     ):
         raise ValueError("2DRO velocity and radar scan validity timestamps differ.")
+    for frame_idx, (start, end) in enumerate(zip(offsets[:-1], offsets[1:])):
+        reference_rows = np.flatnonzero(
+            azimuth_times[start:end] == frame_times[frame_idx]
+        )
+        if len(reference_rows) != 1 or not np.allclose(
+            transforms[start + reference_rows[0]], np.eye(4), atol=1e-6
+        ):
+            raise ValueError(
+                f"Frame {frame_idx} does not have one identity reference transform."
+            )
     if not np.allclose(frame_transforms[0], np.eye(4)) or not np.allclose(
         frame_transforms[1:] @ reference_poses[:-1], reference_poses[1:]
     ):
@@ -582,9 +595,8 @@ def get_gt_azimuth_odometry(loc_seq, frame_idx, radar_frame):
     return np.asarray(azimuth_poses) @ radar_frame.pose
 
 
-def print_dro_odometry_error(dro_transforms, reference_pose, gt_transforms):
-    dro_left_transforms = reference_pose @ dro_transforms @ np.linalg.inv(reference_pose)
-    errors = dro_left_transforms @ np.linalg.inv(gt_transforms)
+def print_dro_odometry_error(dro_transforms, gt_transforms):
+    errors = dro_transforms @ np.linalg.inv(gt_transforms)
     translation = np.linalg.norm(errors[:, :3, 3], axis=1)
     rotation_deg = np.rad2deg(R.from_matrix(errors[:, :3, :3]).magnitude())
     print(
@@ -812,7 +824,6 @@ def run_sequence(
         if validate_dro_odometry:
             print_dro_odometry_error(
                 odom_transforms,
-                dro_odometry["reference_poses"][radar_frame_idx],
                 get_gt_azimuth_odometry(loc_seq, radar_frame_idx, radar_frame),
             )
 

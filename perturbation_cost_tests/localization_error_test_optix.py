@@ -10,8 +10,6 @@ import cv2
 import numpy as np
 import torch
 from pyboreas import BoreasDataset
-from pyboreas.utils.odometry import interpolate_poses
-from pyboreas.utils.utils import get_inverse_tf
 from scipy.interpolate import interp1d
 from scipy.ndimage import shift
 
@@ -26,6 +24,7 @@ from localization_dfo.optix_backend import OptixDepthBackend
 from localization_dfo.pipeline_dfo import (
     build_path_candidates,
     build_T_radar_robot,
+    get_gt_azimuth_odometry,
     load_dro_odometry,
     nearest_submap_idx,
 )
@@ -291,22 +290,9 @@ def run_sequence(
         T_enu_radar = radar_frame.pose
         T_gt = np.linalg.inv(T_enu_radar)
         if odometry_data is None:
-            poses = [
-                get_inverse_tf(rad_frame.pose)
-                for rad_frame in loc_seq.radar_frames[
-                    radar_frame_idx - 1:radar_frame_idx + 2
-                ]
-            ]
-            times = [
-                rad_frame.timestamp_micro
-                for rad_frame in loc_seq.radar_frames[
-                    radar_frame_idx - 1:radar_frame_idx + 2
-                ]
-            ]
-            azimuth_poses = interpolate_poses(
-                poses, times, radar_frame.timestamps.flatten().tolist()
+            odom_transforms = get_gt_azimuth_odometry(
+                loc_seq, radar_frame_idx, radar_frame
             )
-            odom_transforms = np.array([T_enu_radar @ T_i for T_i in azimuth_poses])
         else:
             start, end = odometry_data["frame_offsets"][
                 radar_frame_idx:radar_frame_idx + 2
@@ -480,7 +466,11 @@ def main():
         if odometry_path is None
         else load_dro_odometry(odometry_path, loc_seq.radar_frames)
     )
-    output_dir = Path("perturbation_cost_tests") / loc_seq.ID
+    output_dir = (
+        Path("perturbation_cost_tests") / loc_seq.ID / args.odometry
+        if args.odometry
+        else Path("perturbation_cost_tests") / loc_seq.ID / "GT"
+    )
     run_sequence(
         map_seq=map_seq,
         loc_seq=loc_seq,

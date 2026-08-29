@@ -296,7 +296,7 @@ def torch_mesh_depth_geometry_batch(
     device = torch.device(device)
     points = _as_points_xyz(P_v, device)
     faces = _as_triangles(triangles, device, len(points))
-    T_batch_np = np.asarray([T @ odom_i for odom_i in odom_batch])
+    T_batch_np = np.asarray([odom_i @ T for odom_i in odom_batch])
     T_batch = torch.as_tensor(T_batch_np, device=device, dtype=points.dtype)
     azimuths = torch.as_tensor(radar_azimuth_batch, device=device, dtype=points.dtype)
     batch_size = int(T_batch.shape[0])
