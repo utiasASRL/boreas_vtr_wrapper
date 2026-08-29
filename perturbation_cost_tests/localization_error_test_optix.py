@@ -26,6 +26,7 @@ from localization_dfo.optix_backend import OptixDepthBackend
 from localization_dfo.pipeline_dfo import (
     build_path_candidates,
     build_T_radar_robot,
+    load_dro_odometry,
     nearest_submap_idx,
 )
 from perturbation_cost_tests.perturbation_utils import (
@@ -33,6 +34,24 @@ from perturbation_cost_tests.perturbation_utils import (
     write_to_csv,
 )
 from perturbation_cost_tests.radar_translator_cnn import RadarTranslatorCNN
+
+
+ODOMETRY_ROOTS = {
+    "wheel_odometry": Path("external/wheel_odometry/output"),
+    "3DRO": Path("external/dro/output"),
+    "DRO": Path("external/dro/output_2d"),
+}
+
+
+def resolve_odometry_path(wrapper_root, sequence_id, source):
+    if source is None:
+        return None
+    return (
+        Path(wrapper_root)
+        / ODOMETRY_ROOTS[source]
+        / sequence_id
+        / "odometry_result/azimuth_odometry.npz"
+    )
 
 
 def correct_offsets_gt(radar_frame, frame_index, sequence):
@@ -235,6 +254,7 @@ def run_sequence(
     device,
     mesh_root,
     output_dir,
+    odometry_data=None,
     batch_size=32,
 ):
     print(f"Map SequenceID: {map_seq.ID}")
@@ -266,21 +286,37 @@ def run_sequence(
         t0 = perf_counter()
         radar_frame = loc_seq.get_radar(radar_frame_idx)
 
-        poses = [
-            get_inverse_tf(rad_frame.pose)
-            for rad_frame in loc_seq.radar_frames[radar_frame_idx - 1:radar_frame_idx + 2]
-        ]
-        times = [
-            rad_frame.timestamp_micro
-            for rad_frame in loc_seq.radar_frames[radar_frame_idx - 1:radar_frame_idx + 2]
-        ]
-        query_times = radar_frame.timestamps.flatten().tolist()
-        azimuth_poses = interpolate_poses(poses, times, query_times)
         radar_azimuths = radar_frame.azimuths.flatten()
 
         T_enu_radar = radar_frame.pose
         T_gt = np.linalg.inv(T_enu_radar)
-        odom_transforms = np.array([T_enu_radar @ T_i for T_i in azimuth_poses])
+        if odometry_data is None:
+            poses = [
+                get_inverse_tf(rad_frame.pose)
+                for rad_frame in loc_seq.radar_frames[
+                    radar_frame_idx - 1:radar_frame_idx + 2
+                ]
+            ]
+            times = [
+                rad_frame.timestamp_micro
+                for rad_frame in loc_seq.radar_frames[
+                    radar_frame_idx - 1:radar_frame_idx + 2
+                ]
+            ]
+            azimuth_poses = interpolate_poses(
+                poses, times, radar_frame.timestamps.flatten().tolist()
+            )
+            odom_transforms = np.array([T_enu_radar @ T_i for T_i in azimuth_poses])
+        else:
+            start, end = odometry_data["frame_offsets"][
+                radar_frame_idx:radar_frame_idx + 2
+            ]
+            odom_times = odometry_data["azimuth_timestamps_us"][start:end]
+            if not np.array_equal(odom_times, radar_frame.timestamps.flatten()):
+                raise ValueError(
+                    f"Odometry azimuth timestamps differ for radar frame {radar_frame.frame}."
+                )
+            odom_transforms = odometry_data["odom_transforms"][start:end]
         T_robot_enu = T_robot_radar @ T_gt
         curr_submap, lidar_frame, _ = submap_candidates[
             nearest_submap_idx(T_robot_enu, submap_candidates)
@@ -383,6 +419,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--device", default="cuda:3" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--min-range-m", type=float, default=7.0)
+    parser.add_argument("--odometry", choices=ODOMETRY_ROOTS)
     parser.add_argument("--mesh-root", type=Path, default=None)
     parser.add_argument("--model-weights", type=Path, default=None)
     args = parser.parse_args()
@@ -433,6 +470,16 @@ def main():
 
     map_seq = bd.get_seq_from_ID(args.map_sequence)
     loc_seq = bd.get_seq_from_ID(args.loc_sequence)
+    odometry_path = resolve_odometry_path(
+        boreas_vtr_wrapper_dir, loc_seq.ID, args.odometry
+    )
+    if odometry_path is not None and not odometry_path.is_file():
+        raise FileNotFoundError(f"Odometry does not exist: {odometry_path}")
+    odometry_data = (
+        None
+        if odometry_path is None
+        else load_dro_odometry(odometry_path, loc_seq.radar_frames)
+    )
     output_dir = Path("perturbation_cost_tests") / loc_seq.ID
     run_sequence(
         map_seq=map_seq,
@@ -445,6 +492,7 @@ def main():
         device=device,
         mesh_root=mesh_root,
         output_dir=output_dir,
+        odometry_data=odometry_data,
         batch_size=args.batch_size,
     )
 
