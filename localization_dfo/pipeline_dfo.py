@@ -88,6 +88,7 @@ MISSING_OBSERVED_EVIDENCE_FRACTION = 0.60
 SUBMAP_SEARCH_RADIUS = 5
 SUBMAP_SEARCH_MAX_RADIUS = 20
 COARSE_TRANSLATION_TARGET_M = 1.0
+# COARSE_TRANSLATION_TARGET_M = 0.3
 COARSE_ROTATION_TARGET_DEG = 3.0
 FINE_TRANSLATION_TARGET_M = 0.01
 FINE_ROTATION_TARGET_DEG = 0.05
@@ -1119,7 +1120,7 @@ def main():
     parser.add_argument("--radar-start-frame", type=int, default=0)
     parser.add_argument("--radar-end-frame", type=int, default=None)
     parser.add_argument("--imfil-budget", type=int, default=60)
-    parser.add_argument("--min-range-m", type=float, default=7.0)
+    parser.add_argument("--min-range-m", type=float, default=5.0)
     parser.add_argument("--imfil-function-delta", type=float)
     parser.add_argument("--imfil-stencil-delta", type=float)
     parser.add_argument("--save-predictions", action="store_true")
@@ -1204,8 +1205,7 @@ def main():
     # lambda_prior_tracking = 0
     # lambda_prior_recovery = 0
     # sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 0.075, 0.050, 0.05, 0.15, 0.15, 0.05 # OG3 best values
-    sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 0.5, 0.2, 0.1, 1.0, 1.0, 0.01
-    # sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 1000.0, 1000.0, 0.3, 3.0, 3.0, 0.1
+    sigma_x, sigma_y, sigma_z, sigma_roll, sigma_pitch, sigma_yaw = 0.5, 0.2, 0.2, 1.0, 1.0, 0.05 # dro
     
     sigma_prior = np.array([
         sigma_x,
