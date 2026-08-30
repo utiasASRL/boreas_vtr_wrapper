@@ -175,7 +175,15 @@ def build_T_lidar_robot(seq):
     return T_lidar_wheel * T_wheel_robot
 
 
-def load_submap_mesh_to_enu(mesh_root, sequence_id, submap, T_lidar_robot, lidar_pose, device):
+def load_submap_mesh_to_enu(
+    mesh_root,
+    sequence_id,
+    submap,
+    T_lidar_robot,
+    lidar_pose,
+    device,
+    to_enu=True,
+):
     submap_stamp_us = submap.stamp // 1000
     mesh_dir = Path(mesh_root) / sequence_id / str(submap_stamp_us)
     vertices_path = mesh_dir / "vertices.npy"
@@ -206,11 +214,14 @@ def load_submap_mesh_to_enu(mesh_root, sequence_id, submap, T_lidar_robot, lidar
     disk_load_time = perf_counter() - t0
 
     t0 = perf_counter()
-    vertices_lidar = convert_points_to_frame(vertices_robot.T, T_lidar_robot)
-    T_enu_lidar = Transformation(T_ba=lidar_pose)
-    vertices_enu = convert_points_to_frame(vertices_lidar, T_enu_lidar)
+    if to_enu:
+        vertices_lidar = convert_points_to_frame(vertices_robot.T, T_lidar_robot)
+        T_enu_lidar = Transformation(T_ba=lidar_pose)
+        vertices_output = convert_points_to_frame(vertices_lidar, T_enu_lidar).T
+    else:
+        vertices_output = vertices_robot
     vertices_gpu = torch.as_tensor(
-        vertices_enu.T, device=device, dtype=torch.float32
+        vertices_output, device=device, dtype=torch.float32
     ).contiguous()
     triangles_gpu = torch.as_tensor(
         triangles, device=device, dtype=torch.int32
@@ -222,5 +233,7 @@ def load_submap_mesh_to_enu(mesh_root, sequence_id, submap, T_lidar_robot, lidar
     print(f"Loaded submap mesh {submap_stamp_us}: {len(vertices_robot)} vertices, {len(triangles)} faces")
     return vertices_gpu, triangles_gpu, {
         "mesh_disk_load": disk_load_time,
-        "mesh_robot_to_enu_upload": transform_upload_time,
+        (
+            "mesh_robot_to_enu_upload" if to_enu else "mesh_robot_upload"
+        ): transform_upload_time,
     }

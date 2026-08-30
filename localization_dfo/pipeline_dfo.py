@@ -158,6 +158,18 @@ def build_T_radar_robot(seq, T_lidar_robot):
     return np.asarray(seq.calib.T_radar_lidar, dtype=float) @ transform_matrix(T_lidar_robot)
 
 
+def build_T_enu_submap(lidar_frame, T_lidar_robot):
+    return np.asarray(lidar_frame.pose, dtype=float) @ transform_matrix(T_lidar_robot)
+
+
+def rebase_pose(T_sensor_old_submap, T_enu_old_submap, T_enu_new_submap):
+    return (
+        T_sensor_old_submap
+        @ np.linalg.inv(T_enu_old_submap)
+        @ T_enu_new_submap
+    )
+
+
 def build_path_candidates(map_seq, path_submap_pairs, T_lidar_robot):
     lidar_frames_by_stamp = {int(frame.frame): frame for frame in map_seq.lidar_frames}
     candidates = []
@@ -253,6 +265,16 @@ def calculate_imfil_scales(bounds):
     )
     return max(0, math.ceil(math.log2(coarse_ratio))), max(
         0, math.ceil(math.log2(fine_ratio))
+    )
+
+
+def pose_prior_cost(eps, sigma_prior, T_candidate=None, nominal_z=None):
+    scaled = np.asarray(eps) / sigma_prior
+    if nominal_z is None:
+        return float(np.sum(scaled**2))
+    return float(
+        np.sum(scaled[[0, 1, 3, 4, 5]] ** 2)
+        + ((T_candidate[2, 3] - nominal_z) / sigma_prior[2]) ** 2
     )
 
 
@@ -417,11 +439,10 @@ def append_localization_result(csv_path, result_row):
         csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES).writerow(result_row)
 
 
-def build_pyboreas_result_row(radar_frame, reference_lidar_frame, T_radar_enu):
-    T_lidar_radar = (
-        np.linalg.inv(reference_lidar_frame.pose)
-        @ np.linalg.inv(T_radar_enu)
-    )
+def build_pyboreas_result_row(
+    radar_frame, reference_lidar_frame, T_radar_submap, T_lidar_robot
+):
+    T_lidar_radar = transform_matrix(T_lidar_robot) @ np.linalg.inv(T_radar_submap)
     return [
         radar_frame.timestamp_micro,
         reference_lidar_frame.timestamp_micro,
@@ -447,13 +468,15 @@ def load_pyboreas_results(pose_path):
     return rows
 
 
-def load_resume_state(csv_path, pose_rows, map_seq, loc_seq, radar_start_frame):
+def load_resume_state(
+    csv_path, pose_rows, map_seq, loc_seq, radar_start_frame, T_lidar_robot
+):
     last_result = None
     with csv_path.open(newline="") as f:
         for last_result in csv.DictReader(f):
             pass
     if last_result is None:
-        return None, "tracking", 0, 0
+        return None, None, "tracking", 0, 0
 
     previous_frame = loc_seq.radar_frames[radar_start_frame - 1]
     previous_timestamp = previous_frame.timestamp_micro
@@ -473,7 +496,7 @@ def load_resume_state(csv_path, pose_rows, map_seq, loc_seq, radar_start_frame):
         raise ValueError(f"Saved reference lidar frame not found: {lidar_timestamp}")
     T_lidar_radar = np.eye(4)
     T_lidar_radar[:3] = np.asarray(pose_row[2:], dtype=float).reshape(3, 4)
-    previous_pose = np.linalg.inv(lidar_frame.pose @ T_lidar_radar)
+    previous_pose = np.linalg.inv(T_lidar_radar) @ transform_matrix(T_lidar_robot)
 
     state = last_result["localization_state"]
     consecutive_rejections = int(last_result["consecutive_rejections"])
@@ -494,7 +517,7 @@ def load_resume_state(csv_path, pose_rows, map_seq, loc_seq, radar_start_frame):
     elif state == "recovery" and not rejected and not jump:
         state = "tracking"
     print(f"Resuming after radar frame {radar_start_frame - 1} in {state} state")
-    return previous_pose, state, consecutive_rejections, 0
+    return previous_pose, lidar_timestamp, state, consecutive_rejections, 0
 
 
 def load_dro_odometry(path, radar_frames):
@@ -702,6 +725,7 @@ def run_sequence(
     pose_gating,
     imfil_function_delta,
     imfil_stencil_delta,
+    z_prior=False,
 ):
     print(f"Map SequenceID: {map_seq.ID}")
     print(f"Localization SequenceID: {loc_seq.ID}")
@@ -714,7 +738,9 @@ def run_sequence(
     _, path_submap_pairs = get_path_vertices_with_submaps(graph_dir=graph_dir)
     T_lidar_robot = build_T_lidar_robot(map_seq)
     submap_candidates = build_path_candidates(map_seq, path_submap_pairs, T_lidar_robot)
-    T_robot_radar = np.linalg.inv(build_T_radar_robot(loc_seq, build_T_lidar_robot(loc_seq)))
+    T_radar_robot = build_T_radar_robot(loc_seq, build_T_lidar_robot(loc_seq))
+    T_robot_radar = np.linalg.inv(T_radar_robot)
+    nominal_z = T_radar_robot[2, 3]
 
     submap_idx = None
     radar_frame_idx = radar_start_frame
@@ -726,6 +752,7 @@ def run_sequence(
     dro_odometry = load_dro_odometry(dro_odometry_path, loc_seq.radar_frames)
     (
         previous_localized_pose,
+        previous_submap_stamp_us,
         localization_state,
         consecutive_rejections,
         healthy_recovery_accepts,
@@ -735,7 +762,15 @@ def run_sequence(
         map_seq,
         loc_seq,
         radar_start_frame,
+        T_lidar_robot,
     )
+    if previous_submap_stamp_us is not None:
+        submap_idx = next(
+            idx
+            for idx, (submap, _, _) in enumerate(submap_candidates)
+            if submap.stamp // 1000 == previous_submap_stamp_us
+        )
+    resume_selection_pending = previous_submap_stamp_us is not None
     model_warmed_up = False
     steady_iteration_time_sum = 0.0
 
@@ -751,16 +786,20 @@ def run_sequence(
     first_radar_frame = loc_seq.radar_frames[0]
     first_timestamp = first_radar_frame.timestamp_micro
     if first_timestamp not in pyboreas_rows:
-        T_first_gt = np.linalg.inv(first_radar_frame.pose)
+        T_first_gt_enu = np.linalg.inv(first_radar_frame.pose)
         first_submap_idx = nearest_submap_idx(
-            T_robot_radar @ T_first_gt,
+            T_robot_radar @ T_first_gt_enu,
             submap_candidates,
         )
         first_lidar_frame = submap_candidates[first_submap_idx][1]
+        T_first_gt = T_first_gt_enu @ build_T_enu_submap(
+            first_lidar_frame, T_lidar_robot
+        )
         first_row = build_pyboreas_result_row(
             first_radar_frame,
             first_lidar_frame,
             T_first_gt,
+            T_lidar_robot,
         )
         pyboreas_rows[first_timestamp] = [str(value) for value in first_row]
         append_pyboreas_result(results_pose_path, first_row)
@@ -828,33 +867,52 @@ def run_sequence(
                 get_gt_azimuth_odometry(loc_seq, radar_frame_idx, radar_frame),
             )
 
-        T_gt = np.linalg.inv(radar_frame.pose)
+        T_gt_enu = np.linalg.inv(radar_frame.pose)
         if previous_localized_pose is None:
-            T_init = T_gt.copy()
+            T_robot_enu = T_robot_radar @ T_gt_enu
         else:
             frame_delta = dro_odometry["frame_transforms"][radar_frame_idx]
             T_init = frame_delta @ previous_localized_pose
+            previous_lidar_frame = submap_candidates[submap_idx][1]
+            T_enu_previous_submap = build_T_enu_submap(
+                previous_lidar_frame, T_lidar_robot
+            )
+            T_robot_enu = (
+                T_robot_radar @ T_init @ np.linalg.inv(T_enu_previous_submap)
+            )
 
-        # submap selection with T_gt
-        # T_robot_enu = T_robot_radar @ T_gt
-
-        # submap selection with T_init
-        T_robot_enu = T_robot_radar @ T_init
-
-        submap_idx = nearest_submap_idx(T_robot_enu, submap_candidates, submap_idx)
+        next_submap_idx = nearest_submap_idx(
+            T_robot_enu,
+            submap_candidates,
+            None if resume_selection_pending else submap_idx,
+        )
+        resume_selection_pending = False
+        if previous_localized_pose is not None:
+            next_lidar_frame = submap_candidates[next_submap_idx][1]
+            T_init = rebase_pose(
+                T_init,
+                T_enu_previous_submap,
+                build_T_enu_submap(next_lidar_frame, T_lidar_robot),
+            )
+        submap_idx = next_submap_idx
         curr_submap, lidar_frame, _ = submap_candidates[submap_idx]
+        T_enu_submap = build_T_enu_submap(lidar_frame, T_lidar_robot)
+        T_gt = T_gt_enu @ T_enu_submap
+        if previous_localized_pose is None:
+            T_init = T_gt.copy()
         frame_setup_time_s = perf_counter() - frame_setup_start
 
         mesh_update_start = perf_counter()
         submap_stamp_us = curr_submap.stamp // 1000
         if loaded_mesh_submap_stamp_us != submap_stamp_us:
-            mesh_vertices_gpu, mesh_triangles_gpu, _ = load_submap_mesh_to_enu( # vertices in enu frame
+            mesh_vertices_gpu, mesh_triangles_gpu, _ = load_submap_mesh_to_enu(
                 mesh_root=mesh_root,
                 sequence_id=map_seq.ID,
                 submap=curr_submap,
                 T_lidar_robot=T_lidar_robot,
                 lidar_pose=lidar_frame.pose,
                 device=device,
+                to_enu=False,
             )
             optix_backend.set_mesh(mesh_vertices_gpu, mesh_triangles_gpu)
             loaded_mesh_submap_stamp_us = submap_stamp_us
@@ -889,14 +947,20 @@ def run_sequence(
         )
 
         def cost_fn(eps):
+            T_evaluation = left_se3_retract(T=T_init, delta=eps)
             cost, timing = compute_optix_cost(
                 optix_backend,
-                left_se3_retract(T=T_init, delta=eps),
+                T_evaluation,
                 radar_polar_cropped_gpu,
                 model,
             )
 
-            prior_cost = np.sum((eps / sigma_prior)**2)
+            prior_cost = pose_prior_cost(
+                eps,
+                sigma_prior,
+                T_evaluation,
+                nominal_z if z_prior else None,
+            )
             total_cost = cost + lambda_prior * prior_cost
             cost_call_timings.append(timing)
             return total_cost
@@ -918,10 +982,16 @@ def run_sequence(
         optimization_time_s = perf_counter() - t_opt
         peak_cuda_memory_mb = torch.cuda.max_memory_allocated(device) / 1024**2
         eps_best, candidate_cost = extract_best_from_result(result, logger)
-        candidate_prior_penalty = float(
-            lambda_prior * np.sum((eps_best / sigma_prior) ** 2)
-        )
         T_candidate = left_se3_retract(T=T_init, delta=eps_best)
+        candidate_prior_penalty = float(
+            lambda_prior
+            * pose_prior_cost(
+                eps_best,
+                sigma_prior,
+                T_candidate,
+                nominal_z if z_prior else None,
+            )
+        )
         T_hat = T_candidate
         candidate_prediction = None
         accepted_prediction = None
@@ -1053,7 +1123,9 @@ def run_sequence(
                 },
             ),
         )
-        pose_row = build_pyboreas_result_row(radar_frame, lidar_frame, T_hat)
+        pose_row = build_pyboreas_result_row(
+            radar_frame, lidar_frame, T_hat, T_lidar_robot
+        )
         pyboreas_rows[radar_frame.timestamp_micro] = [str(value) for value in pose_row]
         append_pyboreas_result(results_pose_path, pose_row)
         print(f"Saved localization result: {results_csv_path}")
@@ -1129,6 +1201,11 @@ def main():
     parser.add_argument("--dro-odometry", type=Path)
     parser.add_argument("--validate-dro-odometry", action="store_true")
     parser.add_argument("--pose-gating", action="store_true")
+    parser.add_argument(
+        "--z-prior",
+        action="store_true",
+        help="Prioritize calibrated radar height in submap_robot instead of eps_z.",
+    )
     output_mode = parser.add_mutually_exclusive_group()
     output_mode.add_argument("--append", action="store_true")
     output_mode.add_argument("--overwrite", action="store_true")
@@ -1258,6 +1335,7 @@ def main():
             pose_gating=args.pose_gating,
             imfil_function_delta=args.imfil_function_delta,
             imfil_stencil_delta=args.imfil_stencil_delta,
+            z_prior=args.z_prior,
         )
 
 
