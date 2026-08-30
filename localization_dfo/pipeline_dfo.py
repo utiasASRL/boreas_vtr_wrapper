@@ -85,8 +85,7 @@ RESULT_FIELDNAMES = [
 TRANSLATION_JUMP_M = 0.20
 ROTATION_JUMP_DEG = 0.50 # 3D odometry
 MISSING_OBSERVED_EVIDENCE_FRACTION = 0.60
-SUBMAP_SEARCH_RADIUS = 5
-SUBMAP_SEARCH_MAX_RADIUS = 20
+SUBMAP_SEARCH_DEPTH = 20
 COARSE_TRANSLATION_TARGET_M = 1.0
 # COARSE_TRANSLATION_TARGET_M = 0.3
 COARSE_ROTATION_TARGET_DEG = 3.0
@@ -207,27 +206,18 @@ def build_path_candidates(
     return candidates
 
 
-def nearest_submap_idx(T_query_root, candidates, center_idx=None, radius=SUBMAP_SEARCH_RADIUS):
+def nearest_submap_idx(T_query_root, candidates, center_idx=None):
     if center_idx is None:
         return min(
             range(len(candidates)),
             key=lambda idx: submap_distance(T_query_root, candidates[idx][2]),
         )
 
-    max_radius = min(SUBMAP_SEARCH_MAX_RADIUS, len(candidates) // 2)
-    radius = min(radius, max_radius)
-    while True:
-        offsets = {
-            (center_idx + offset) % len(candidates): offset
-            for offset in range(-radius, radius + 1)
-        }
-        best_idx, best_offset = min(
-            offsets.items(),
-            key=lambda item: submap_distance(T_query_root, candidates[item[0]][2]),
-        )
-        if abs(best_offset) < radius or radius >= max_radius:
-            return best_idx
-        radius = min(radius * 2, max_radius)
+    end_idx = min(center_idx + SUBMAP_SEARCH_DEPTH + 1, len(candidates))
+    return min(
+        range(center_idx, end_idx),
+        key=lambda idx: submap_distance(T_query_root, candidates[idx][2]),
+    )
 
 
 def optimizer_bounds(localization_state):
@@ -759,9 +749,6 @@ def run_sequence(
     submap_candidates = build_path_candidates(
         map_seq, path_submap_pairs, T_lidar_robot, graph_frame=True
     )
-    gt_submap_candidates = build_path_candidates(
-        map_seq, path_submap_pairs, T_lidar_robot
-    )
     T_radar_robot = build_T_radar_robot(loc_seq, build_T_lidar_robot(loc_seq))
     T_robot_radar = np.linalg.inv(T_radar_robot)
     nominal_z = T_radar_robot[2, 3]
@@ -794,7 +781,6 @@ def run_sequence(
             for idx, (submap, _, _) in enumerate(submap_candidates)
             if submap.stamp // 1000 == previous_submap_stamp_us
         )
-    resume_selection_pending = previous_submap_stamp_us is not None
     model_warmed_up = False
     steady_iteration_time_sum = 0.0
 
@@ -811,10 +797,7 @@ def run_sequence(
     first_timestamp = first_radar_frame.timestamp_micro
     if first_timestamp not in pyboreas_rows:
         T_first_gt_enu = np.linalg.inv(first_radar_frame.pose)
-        first_submap_idx = nearest_submap_idx(
-            T_robot_radar @ T_first_gt_enu,
-            gt_submap_candidates,
-        )
+        first_submap_idx = 0
         first_lidar_frame = submap_candidates[first_submap_idx][1]
         T_first_gt = T_first_gt_enu @ build_T_enu_submap(
             first_lidar_frame, T_lidar_robot
@@ -893,10 +876,7 @@ def run_sequence(
 
         T_gt_enu = np.linalg.inv(radar_frame.pose)
         if previous_localized_pose is None:
-            next_submap_idx = nearest_submap_idx(
-                T_robot_radar @ T_gt_enu,
-                gt_submap_candidates,
-            )
+            next_submap_idx = 0
         else:
             frame_delta = dro_odometry["frame_transforms"][radar_frame_idx]
             T_init = frame_delta @ previous_localized_pose
@@ -910,9 +890,8 @@ def run_sequence(
             next_submap_idx = nearest_submap_idx(
                 T_robot_graph,
                 submap_candidates,
-                None if resume_selection_pending else submap_idx,
+                submap_idx,
             )
-        resume_selection_pending = False
         if previous_localized_pose is not None:
             next_submap = submap_candidates[next_submap_idx][0]
             T_init = rebase_pose(
