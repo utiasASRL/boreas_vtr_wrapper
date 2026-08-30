@@ -142,8 +142,8 @@ def vtr_pose_distance(T_query_submap, angle_weight=7.0):
     return float(np.linalg.norm(se3[:3]) + angle_weight * np.linalg.norm(se3[3:]))
 
 
-def submap_distance(T_query_enu, T_enu_submap, angle_weight=7.0):
-    T_query_submap = T_query_enu @ T_enu_submap
+def submap_distance(T_query_root, T_root_candidate, angle_weight=7.0):
+    T_query_submap = T_query_root @ T_root_candidate
     return min(
         vtr_pose_distance(T_query_submap, angle_weight),
         vtr_pose_distance(T_query_submap @ T_180_YAW, angle_weight),
@@ -162,40 +162,56 @@ def build_T_enu_submap(lidar_frame, T_lidar_robot):
     return np.asarray(lidar_frame.pose, dtype=float) @ transform_matrix(T_lidar_robot)
 
 
-def rebase_pose(T_sensor_old_submap, T_enu_old_submap, T_enu_new_submap):
+def resolve_map_results_id(sequence_id, suffix=None):
+    if suffix is None:
+        return sequence_id
+    if Path(suffix).name != suffix or suffix in {"", ".", ".."}:
+        raise ValueError("--map-odometry must be a non-empty filename-safe suffix.")
+    return f"{sequence_id}-{suffix}"
+
+
+def rebase_pose(T_sensor_old_submap, T_root_old_submap, T_root_new_submap):
     return (
         T_sensor_old_submap
-        @ np.linalg.inv(T_enu_old_submap)
-        @ T_enu_new_submap
+        @ np.linalg.inv(T_root_old_submap)
+        @ T_root_new_submap
     )
 
 
-def build_path_candidates(map_seq, path_submap_pairs, T_lidar_robot):
+def build_path_candidates(
+    map_seq, path_submap_pairs, T_lidar_robot, *, graph_frame=False
+):
     lidar_frames_by_stamp = {int(frame.frame): frame for frame in map_seq.lidar_frames}
     candidates = []
     for path_vertex, submap_vertex in path_submap_pairs:
-        path_stamp_us = path_vertex.stamp // 1000
-        path_lidar_frame = lidar_frames_by_stamp.get(path_stamp_us)
-        if path_lidar_frame is None:
-            raise ValueError(f"No lidar frame in {map_seq.ID} for path vertex stamp {path_stamp_us}.")
+        if graph_frame:
+            T_root_robot = transform_matrix(path_vertex.T_w_v)
+        else:
+            path_stamp_us = path_vertex.stamp // 1000
+            path_lidar_frame = lidar_frames_by_stamp.get(path_stamp_us)
+            if path_lidar_frame is None:
+                raise ValueError(f"No lidar frame in {map_seq.ID} for path vertex stamp {path_stamp_us}.")
+            T_root_robot = (
+                np.asarray(path_lidar_frame.pose, dtype=float)
+                @ transform_matrix(T_lidar_robot)
+            )
 
         submap_stamp_us = submap_vertex.stamp // 1000
         submap_lidar_frame = lidar_frames_by_stamp.get(submap_stamp_us)
         if submap_lidar_frame is None:
             raise ValueError(f"No lidar frame in {map_seq.ID} for submap stamp {submap_stamp_us}.")
 
-        T_enu_robot = np.asarray(path_lidar_frame.pose, dtype=float) @ transform_matrix(T_lidar_robot)
-        candidates.append((submap_vertex, submap_lidar_frame, T_enu_robot))
+        candidates.append((submap_vertex, submap_lidar_frame, T_root_robot))
     if not candidates:
         raise ValueError(f"No path candidates found for {map_seq.ID}.")
     return candidates
 
 
-def nearest_submap_idx(T_query_enu, candidates, center_idx=None, radius=SUBMAP_SEARCH_RADIUS):
+def nearest_submap_idx(T_query_root, candidates, center_idx=None, radius=SUBMAP_SEARCH_RADIUS):
     if center_idx is None:
         return min(
             range(len(candidates)),
-            key=lambda idx: submap_distance(T_query_enu, candidates[idx][2]),
+            key=lambda idx: submap_distance(T_query_root, candidates[idx][2]),
         )
 
     max_radius = min(SUBMAP_SEARCH_MAX_RADIUS, len(candidates) // 2)
@@ -207,7 +223,7 @@ def nearest_submap_idx(T_query_enu, candidates, center_idx=None, radius=SUBMAP_S
         }
         best_idx, best_offset = min(
             offsets.items(),
-            key=lambda item: submap_distance(T_query_enu, candidates[item[0]][2]),
+            key=lambda item: submap_distance(T_query_root, candidates[item[0]][2]),
         )
         if abs(best_offset) < radius or radius >= max_radius:
             return best_idx
@@ -726,18 +742,26 @@ def run_sequence(
     imfil_function_delta,
     imfil_stencil_delta,
     z_prior=False,
+    map_results_id=None,
 ):
     print(f"Map SequenceID: {map_seq.ID}")
+    map_results_id = map_results_id or map_seq.ID
+    print(f"Map ResultsID: {map_results_id}")
     print(f"Localization SequenceID: {loc_seq.ID}")
     print(f"Number of Radar Frames: {len(loc_seq.radar_frames)}")
 
     end_frame = len(loc_seq.radar_frames) - 2 if radar_end_frame is None else min(radar_end_frame, len(loc_seq.radar_frames) - 2)
     radar_start_frame = max(radar_start_frame, 1)
 
-    graph_dir = os.path.join(lidar_results_dir, map_seq.ID, map_seq.ID, "graph")
+    graph_dir = os.path.join(lidar_results_dir, map_results_id, map_seq.ID, "graph")
     _, path_submap_pairs = get_path_vertices_with_submaps(graph_dir=graph_dir)
     T_lidar_robot = build_T_lidar_robot(map_seq)
-    submap_candidates = build_path_candidates(map_seq, path_submap_pairs, T_lidar_robot)
+    submap_candidates = build_path_candidates(
+        map_seq, path_submap_pairs, T_lidar_robot, graph_frame=True
+    )
+    gt_submap_candidates = build_path_candidates(
+        map_seq, path_submap_pairs, T_lidar_robot
+    )
     T_radar_robot = build_T_radar_robot(loc_seq, build_T_lidar_robot(loc_seq))
     T_robot_radar = np.linalg.inv(T_radar_robot)
     nominal_z = T_radar_robot[2, 3]
@@ -789,7 +813,7 @@ def run_sequence(
         T_first_gt_enu = np.linalg.inv(first_radar_frame.pose)
         first_submap_idx = nearest_submap_idx(
             T_robot_radar @ T_first_gt_enu,
-            submap_candidates,
+            gt_submap_candidates,
         )
         first_lidar_frame = submap_candidates[first_submap_idx][1]
         T_first_gt = T_first_gt_enu @ build_T_enu_submap(
@@ -869,30 +893,32 @@ def run_sequence(
 
         T_gt_enu = np.linalg.inv(radar_frame.pose)
         if previous_localized_pose is None:
-            T_robot_enu = T_robot_radar @ T_gt_enu
+            next_submap_idx = nearest_submap_idx(
+                T_robot_radar @ T_gt_enu,
+                gt_submap_candidates,
+            )
         else:
             frame_delta = dro_odometry["frame_transforms"][radar_frame_idx]
             T_init = frame_delta @ previous_localized_pose
-            previous_lidar_frame = submap_candidates[submap_idx][1]
-            T_enu_previous_submap = build_T_enu_submap(
-                previous_lidar_frame, T_lidar_robot
+            previous_submap = submap_candidates[submap_idx][0]
+            T_graph_previous_submap = transform_matrix(previous_submap.T_w_v)
+            T_robot_graph = (
+                T_robot_radar
+                @ T_init
+                @ np.linalg.inv(T_graph_previous_submap)
             )
-            T_robot_enu = (
-                T_robot_radar @ T_init @ np.linalg.inv(T_enu_previous_submap)
+            next_submap_idx = nearest_submap_idx(
+                T_robot_graph,
+                submap_candidates,
+                None if resume_selection_pending else submap_idx,
             )
-
-        next_submap_idx = nearest_submap_idx(
-            T_robot_enu,
-            submap_candidates,
-            None if resume_selection_pending else submap_idx,
-        )
         resume_selection_pending = False
         if previous_localized_pose is not None:
-            next_lidar_frame = submap_candidates[next_submap_idx][1]
+            next_submap = submap_candidates[next_submap_idx][0]
             T_init = rebase_pose(
                 T_init,
-                T_enu_previous_submap,
-                build_T_enu_submap(next_lidar_frame, T_lidar_robot),
+                T_graph_previous_submap,
+                transform_matrix(next_submap.T_w_v),
             )
         submap_idx = next_submap_idx
         curr_submap, lidar_frame, _ = submap_candidates[submap_idx]
@@ -907,7 +933,7 @@ def run_sequence(
         if loaded_mesh_submap_stamp_us != submap_stamp_us:
             mesh_vertices_gpu, mesh_triangles_gpu, _ = load_submap_mesh_to_enu(
                 mesh_root=mesh_root,
-                sequence_id=map_seq.ID,
+                sequence_id=map_results_id,
                 submap=curr_submap,
                 T_lidar_robot=T_lidar_robot,
                 lidar_pose=lidar_frame.pose,
@@ -1187,6 +1213,10 @@ def main():
     parser = argparse.ArgumentParser(description="Run DFO radar-lidar localization.")
     parser.add_argument("--experiment-name", required=True)
     parser.add_argument("--map-sequence", required=True)
+    parser.add_argument(
+        "--map-odometry",
+        help="Suffix for matching lidar results and submap meshes, e.g. odom or gt.",
+    )
     parser.add_argument("--loc-sequence", nargs="+", required=True)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--radar-start-frame", type=int, default=0)
@@ -1228,6 +1258,7 @@ def main():
     experiment_name = Path(args.experiment_name).name
     if experiment_name != args.experiment_name or experiment_name in {"", ".", ".."}:
         raise ValueError("--experiment-name must be a simple filename-safe name.")
+    map_results_id = resolve_map_results_id(args.map_sequence, args.map_odometry)
 
     boreas_vtr_wrapper_dir = os.getenv("VTRROOT")
     boreas_data = os.getenv("VTRRDATA")
@@ -1336,6 +1367,7 @@ def main():
             imfil_function_delta=args.imfil_function_delta,
             imfil_stencil_delta=args.imfil_stencil_delta,
             z_prior=args.z_prior,
+            map_results_id=map_results_id,
         )
 
 
