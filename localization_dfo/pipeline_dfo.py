@@ -1331,6 +1331,7 @@ def main():
             Path(boreas_vtr_wrapper_dir)
             / "localization_dfo"
             / "results"
+            / map_results_id
             / loc_seq.ID
             / experiment_name
         )
