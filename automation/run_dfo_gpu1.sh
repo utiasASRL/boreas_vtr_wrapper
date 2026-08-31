@@ -7,7 +7,7 @@ python3 -m localization_dfo.pipeline_dfo \
     --experiment-name 1-suburb-industrial-farm-prior-DRO-lidar-odom \
     --map-sequence boreas-2024-12-03-12-54 --map-odometry odom \
     --loc-sequence boreas-2025-01-08-12-28 \
-    --radar-start-frame 2392 --imfil-budget 84 \
+    --radar-start-frame 2970 --imfil-budget 84 \
     --save-labels --save-predictions --append --device cuda:1
 
 python3 -m localization_dfo.pipeline_dfo \
