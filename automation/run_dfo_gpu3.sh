@@ -3,11 +3,17 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Continuation queue: run after the active DRO-submap localization finishes.
 python3 -m localization_dfo.pipeline_dfo \
     --experiment-name 1-suburb-industrial-farm-prior-DRO-lidar-odom \
     --map-sequence boreas-2025-07-18-14-55 --map-odometry odom \
-    --loc-sequence boreas-2025-07-18-15-12 boreas-2025-07-18-15-30 boreas-2025-07-18-15-48 \
+    --loc-sequence boreas-2025-07-18-15-30 \
+    --radar-start-frame 503 \
+    --save-labels --save-init --save-predictions --append --device cuda:3
+
+python3 -m localization_dfo.pipeline_dfo \
+    --experiment-name 1-suburb-industrial-farm-prior-DRO-lidar-odom \
+    --map-sequence boreas-2025-07-18-14-55 --map-odometry odom \
+    --loc-sequence boreas-2025-07-18-15-48 \
     --radar-start-frame 0 \
     --save-labels --save-init --save-predictions --overwrite --device cuda:3
 

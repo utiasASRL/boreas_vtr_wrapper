@@ -6,9 +6,9 @@ cd "$(dirname "$0")/.."
 python3 -m localization_dfo.pipeline_dfo \
     --experiment-name 1-suburb-industrial-farm-prior-DRO-lidar-odom \
     --map-sequence boreas-2024-12-03-12-54 --map-odometry odom \
-    --loc-sequence boreas-2025-01-08-11-22 boreas-2025-01-08-12-28 \
-    --radar-start-frame 0 --imfil-budget 84 \
-    --save-labels --save-predictions --overwrite --device cuda:1
+    --loc-sequence boreas-2025-01-08-12-28 \
+    --radar-start-frame 2391 --imfil-budget 84 \
+    --save-labels --save-predictions --append --device cuda:1
 
 python3 -m localization_dfo.pipeline_dfo \
     --experiment-name 1-suburb-industrial-farm-prior-DRO-lidar-odom \
