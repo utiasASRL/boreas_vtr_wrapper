@@ -220,6 +220,22 @@ def nearest_submap_idx(T_query_root, candidates, center_idx=None):
     )
 
 
+def initial_submap_idx(
+    radar_start_frame,
+    T_gt_enu,
+    T_robot_radar,
+    map_seq,
+    path_submap_pairs,
+    T_lidar_robot,
+):
+    if radar_start_frame <= 100:
+        return 0
+    gt_candidates = build_path_candidates(
+        map_seq, path_submap_pairs, T_lidar_robot
+    )
+    return nearest_submap_idx(T_robot_radar @ T_gt_enu, gt_candidates)
+
+
 def optimizer_bounds(localization_state):
     # bounds = np.array(
     #     [[-0.3, 0.3]] * 3 + [[-3.0, 3.0]] * 3,
@@ -647,7 +663,7 @@ def append_pyboreas_result(pose_path, row):
         csv.writer(f, delimiter=" ").writerow(row)
 
 
-def save_cartesian_radar_image(radar_frame, polar, output_path):
+def save_cartesian_radar_image(radar_frame, polar, output_path, flip_polarity=False):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     radar_frame.polar = polar
     cart = radar_frame.polar_to_cart(
@@ -656,6 +672,8 @@ def save_cartesian_radar_image(radar_frame, polar, output_path):
         in_place=False,
     )
     image = (np.clip(cart, 0.0, 1.0) * 255.0).astype(np.uint8)
+    if flip_polarity:
+        image = 255 - image
     if not cv2.imwrite(str(output_path), image):
         raise IOError(f"Could not save radar image: {output_path}")
 
@@ -876,7 +894,14 @@ def run_sequence(
 
         T_gt_enu = np.linalg.inv(radar_frame.pose)
         if previous_localized_pose is None:
-            next_submap_idx = 0
+            next_submap_idx = initial_submap_idx(
+                radar_start_frame,
+                T_gt_enu,
+                T_robot_radar,
+                map_seq,
+                path_submap_pairs,
+                T_lidar_robot,
+            )
         else:
             frame_delta = dro_odometry["frame_transforms"][radar_frame_idx]
             T_init = frame_delta @ previous_localized_pose
