@@ -1226,7 +1226,7 @@ def main():
     parser.add_argument("--radar-start-frame", type=int, default=0)
     parser.add_argument("--radar-end-frame", type=int, default=None)
     parser.add_argument("--imfil-budget", type=int, default=60)
-    parser.add_argument("--min-range-m", type=float, default=5.0)
+    parser.add_argument("--min-range-m", type=float, default=7.0)
     parser.add_argument("--imfil-function-delta", type=float)
     parser.add_argument("--imfil-stencil-delta", type=float)
     parser.add_argument("--save-predictions", action="store_true")
