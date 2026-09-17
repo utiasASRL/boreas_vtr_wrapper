@@ -21,6 +21,7 @@
         "radar.odometry_icp",
         "radar.localization_map_recall",
         "radar.localization_icp",
+        "navigation.gyro_bias_removal",
         # "radar.odometry_dro",
         # "radar.scan_to_pointmap",
         # "radar.localization_drl",
@@ -38,7 +39,10 @@
       imu:
         use_imu: true
         imu_name: "dmu" # options are "dmu", "aeva", or "imu" (for applanix imu)
-        force_wrap: false # if true, fabricate a bracketing IMU sample from the nearest real one when a scan can't be fully wrapped (e.g. at the start/end of a sequence)
+        force_wrap: true # if true, fabricate a bracketing IMU sample from the nearest real one when a scan can't be fully wrapped (e.g. at the start/end of a sequence)
+        gyro_bias_x: 0.0
+        gyro_bias_y: 0.0
+        gyro_bias_z: 0.0
       wheel_encoder:
         use_wheel_encoder: false
         encoder_max: 16777216 # 2^24
@@ -61,9 +65,9 @@
       chain:
         min_cusp_distance: 1.5
         angle_weight: 7.0
-        search_depth: 5 # matches navtech_warthog_default (online) chain.search_depth
+        search_depth: 20
         search_back_depth: 10
-        distance_warning: 5.0 # matches navtech_warthog_default (online) chain.distance_warning
+        distance_warning: 5.0
 
       save_odometry_result: true
       save_odometry_vel_result: true
@@ -87,12 +91,15 @@
       odometry: [
           # odometry and mapping thread modules
           # "mcransac",
+          "gyro_bias_removal",
           "icp",
+          "gyro_bias_removal",
           # "dro",
           # "gt",
           # "wheel",
           "mapping",
           "vertex_test",
+          # "submap_test",
           # "scan_to_pointmap",
           "memory",
         ]
@@ -106,7 +113,7 @@
         ]
 
       # submap creation thresholds
-      submap_translation_threshold: 1.5 # matches navtech_warthog_default (online) pipeline.submap_translation_threshold
+      submap_translation_threshold: 1.5 # in meters
       submap_rotation_threshold: 30.0 # in degrees
       # save raw pointclouds for training
       # can turn this off for testing
@@ -126,7 +133,7 @@
         type: radar.pc_extractor
         radar_resolution: 0.040308
         # radar_resolution: 0.0596
-        range_offset: -0.220240 # matches navtech_warthog_default (online) extraction.range_offset
+        range_offset: -0.32 # matches navtech_warthog_default (online) extraction.range_offset
         detector: kstrongest # choose detector \in (kstrongest, cen2018, cacfar, oscfar, modified_cacfar)
         minr: 2.0 # mininum detection distance, matches navtech_warthog_default (online)
         maxr: 69.0 # maximum detection distance, matches navtech_warthog_default (online)
@@ -201,6 +208,12 @@
         visualize: false
 
     odometry:
+      gyro_bias_removal:
+        type: navigation.gyro_bias_removal
+        window_size: 1000
+        max_velocity: 0.1 #m/s
+        min_bias_time: 3.0 # seconds, minimum time between bias updates
+
       mcransac:
         type: radar.mcransac
         tolerance: 0.1225 # matched with squared error less than this are inliers
@@ -314,7 +327,7 @@
         max_iterations: 1
 
         # threshold
-        min_matched_ratio: 0.40 # matches navtech_warthog_default (online)
+        min_matched_ratio: 0.00 # matches navtech_warthog_default (online)
 
         visualize: false
 
@@ -357,11 +370,19 @@
         min_int_val_tol: 0.5 # min intensity value to consider a pixel non-zero
         min_percent_nonzero: 0.3 # percent of pixels above min_int_val_tol to stop blurring
 
+        visualize: false
+
       vertex_test:
-        type: radar.vertex_test
+        type: vertex_distance_test
 
         max_translation: 0.2 # matches navtech_warthog_default (online) vertex_test.max_translation
         max_rotation: 10.0 # matches navtech_warthog_default (online) vertex_test.max_rotation
+
+      submap_test:
+        type: submap_distance_test
+
+        max_translation: 1.5 # matches navtech_warthog_default (online) submap_test.max_translation
+        max_rotation: 30.0
 
       memory:
         type: "live_mem_manager"
@@ -400,7 +421,7 @@
         max_iterations: 3 # matches navtech_warthog_default (online)
 
         # threshold
-        min_matched_ratio: 0.30 # matches navtech_warthog_default (online)
+        min_matched_ratio: 0.10 # matches navtech_warthog_default (online)
 
       drl:
         type: "radar.localization_drl"

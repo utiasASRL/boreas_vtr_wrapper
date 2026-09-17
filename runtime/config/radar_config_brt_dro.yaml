@@ -20,6 +20,7 @@
         "radar.preprocessing",
         "radar.odometry_dro",
         "radar.scan_to_pointmap",
+        "radar.submap_similarity_test",
         "radar.localization_drl",
         "radar.localization_map_recall",
         # "radar.mcransac",
@@ -89,11 +90,14 @@
           # odometry and mapping thread modules
           # "mcransac",
           # "icp",
+          # "gyro_bias_removal",
           "dro",
+          # "gyro_bias_removal",
           # "gt",
           # "wheel",
           "vertex_test",
-          "submap_test",
+          "submap_similarity_test",
+          # "submap_test",
           # "mapping",
           "scan_to_pointmap",
           "memory",
@@ -196,6 +200,12 @@
         visualize: false
 
     odometry:
+      gyro_bias_removal:
+        type: navigation.gyro_bias_removal
+        window_size: 1000
+        max_velocity: 0.1 #m/s
+        min_bias_time: 1.0 # seconds, minimum time between bias updates
+
       mcransac:
         type: radar.mcransac
         tolerance: 0.1225 # matched with squared error less than this are inliers
@@ -246,6 +256,14 @@
           # is false (yaw estimated, not measured). Offline tunes this per
           # environment: 0.0006 for Suburbs/Highway, 0.001 for Tunnel.
           ang_vel_bias: 0.0006
+          # Weight the whole Doppler cost with the curvature of the direct
+          # cost, recomputed every 'hessian_update_distance' travelled metres.
+          # Thresholds are carried over from the offline DRO config and have
+          # not been validated against VTR's direct-cost scale yet.
+          doppler_hessian_weighting: true
+          hessian_update_distance: 15.0 # m of travelled distance between two Hessian computations
+          hessian_weight_full: -5.0 # largest eigenvalue above which the Doppler cost is fully used
+          hessian_weight_threshold: -6.0 # largest eigenvalue below which the Doppler cost is fully removed
         gp:
           lengthscale_az: 1.0
           lengthscale_range: 1.0
@@ -362,17 +380,34 @@
         min_int_val_tol: 0.5 # min intensity value to consider a pixel non-zero
         min_percent_nonzero: 0.3 # percent of pixels above min_int_val_tol to stop blurring
 
+        visualize: false
+
       vertex_test:
         type: vertex_distance_test
 
-        max_translation: 5.0 # translation threshold in meters
-        max_rotation: 30.0 # rotation threshold in degrees
+        max_translation: 1.0 # translation threshold in meters
+        max_rotation: 10.0 # rotation threshold in degrees
 
       submap_test:
         type: submap_distance_test
 
         max_translation: 10.0
         max_rotation: 30.0
+
+      submap_similarity_test:
+        type: radar.submap_similarity_test
+
+        # Registration score (scaled cross-correlation between the current
+        # smoothed scan and the reference scan from the last submap,
+        # aligned by the accumulated pose estimate) below which a new
+        # submap is created. Follows DR-PoGO's fine-registration
+        # acceptance threshold.
+        min_registration_score: 0.95
+
+        # Hard-cap fallback: always create a new submap once either is
+        # exceeded, regardless of the registration score.
+        max_translation: 100.0
+        max_rotation: 90.0
 
       memory:
         type: "live_mem_manager"
