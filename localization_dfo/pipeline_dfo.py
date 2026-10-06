@@ -25,7 +25,10 @@ from localization_dfo.io_utils import (
 )
 from localization_dfo.optix_backend import OptixDepthBackend, compute_optix_cost
 from localization_dfo.optimizer import ObjectiveLogger, extract_best_from_result, run_imfil_direct
-from localization_dfo.radar_translator_cnn import RadarTranslatorCNN
+# from localization_dfo.models.radar_translator_cnn import RadarTranslatorCNN
+from localization_dfo.models.res_0_1_deg_smaller_encoder import RadarTranslatorCNN
+# from localization_dfo.models.res_0_15_deg import RadarTranslatorCNN
+# from localization_dfo.models.res_0_2_deg import RadarTranslatorCNN
 from localization_dfo.transforms import left_se3_retract
 
 
@@ -1203,9 +1206,9 @@ def resolve_dro_odometry_paths(wrapper_dir, sequence_ids, override=None):
     sequence_ids = list(dict.fromkeys(sequence_ids))
     if override and len(sequence_ids) != 1:
         raise ValueError("--dro-odometry can only be used with one --loc-sequence.")
-    # output_root = Path(wrapper_dir) / "external" / "wheel_odometry" / "output"
+    output_root = Path(wrapper_dir) / "external" / "wheel_odometry" / "output"
     # output_root = Path(wrapper_dir) / "external" / "dro" / "output"
-    output_root = Path(wrapper_dir) / "external" / "dro" / "output_2d"
+    # output_root = Path(wrapper_dir) / "external" / "dro" / "output_2d"
     return sequence_ids, {
         sequence_id: override
         or output_root / sequence_id / "odometry_result" / "azimuth_odometry.npz"
@@ -1294,7 +1297,14 @@ def main():
         boreas_vtr_wrapper_dir,
         # "model_dev/route_weights/1-suburb/best_total.pth",
         # "model_dev/route_weights/1-farm/best_total.pth",
-        "model_dev/route_weights/1-suburb-industrial-farm/best_total.pth",
+        # "model_dev/route_weights/1-industrial/best_total.pth",
+        # "model_dev/ablation_weights/no_depth_prior_branch/best_total.pth",
+        
+        "model_dev/speed_weights/suburb-smaller-encoder/best_total.pth"
+        # "model_dev/speed_weights/suburb-0.15-res_deg/best_total.pth"
+        # "model_dev/speed_weights/suburb-0.2-res_deg/best_total.pth"
+
+        # "model_dev/route_weights/1-suburb-industrial-farm/best_total.pth",
     )
     model = load_radar_translator_model(weights_path, device)
     model = torch.compile(model)

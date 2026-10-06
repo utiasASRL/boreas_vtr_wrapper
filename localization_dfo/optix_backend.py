@@ -9,11 +9,11 @@ class OptixDepthBackend:
             raise RuntimeError("The OptiX depth backend requires a CUDA device.")
         if self.device.index is None:
             self.device = torch.device("cuda", torch.cuda.current_device())
-        if (int(patch_config["height"]), int(patch_config["width"])) != (61, 61):
-            raise ValueError(
-                "The radar translator CNN requires 61x61 patches, got "
-                f"{patch_config['height']}x{patch_config['width']}."
-            )
+        # if (int(patch_config["height"]), int(patch_config["width"])) != (61, 61):
+        #     raise ValueError(
+        #         "The radar translator CNN requires 61x61 patches, got "
+        #         f"{patch_config['height']}x{patch_config['width']}."
+        #     )
         try:
             import optix_range_tracer
         except ImportError as error:
