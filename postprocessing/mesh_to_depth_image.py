@@ -9,11 +9,10 @@ from time import perf_counter
 import numpy as np
 import torch
 from pyboreas import BoreasDataset
-from pyboreas.utils.odometry import interpolate_poses
-from pyboreas.utils.utils import get_inverse_tf
 from pylgmath import Transformation
 from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter1d, shift
+from scipy.spatial.transform import Rotation, Slerp
 from vtr_pose_graph.graph_iterators import TemporalIterator
 import vtr_pose_graph.graph_utils as g_utils
 from vtr_utils.bag_file_parsing import Rosbag2GraphFactory
@@ -99,6 +98,38 @@ def build_lidar_to_robot_transform(seq):
     T_applanix_wheel = Transformation(T_ba=seq.calib.T_applanix_wheel)
     T_applanix_lidar = Transformation(T_ba=seq.calib.T_applanix_lidar)
     return T_applanix_lidar.inverse() * T_applanix_wheel * T_wheel_robot
+
+
+def load_applanix_radar_trajectory(seq):
+    """200 Hz Applanix post-processed trajectory (applanix/gps_post_process.csv) as radar poses.
+
+    Returns times [us], ENU positions, a rotation Slerp and T_applanix_radar, for
+    applanix_radar_poses(). Same reconstruction as external/dro/validate_azimuth_odometry.py: it matches
+    radar_poses.csv at every frame stamp to 0.03 mm / 0.002 deg on boreas-2024-12-03-12-54.
+    """
+    data = np.loadtxt(Path(seq.applanix_root) / "gps_post_process.csv", delimiter=",", skiprows=1)
+    times_us = data[:, 0] * 1e6
+    rotations = Rotation.from_euler("zyx", -data[:, [9, 8, 7]])  # heading, pitch, roll
+    T_applanix_radar = (
+        np.asarray(seq.calib.T_applanix_lidar) @ np.linalg.inv(np.asarray(seq.calib.T_radar_lidar))
+    )
+    return times_us, data[:, 1:4], Slerp((times_us - times_us[0]) * 1e-6, rotations), T_applanix_radar
+
+
+def applanix_radar_poses(trajectory, query_times_us):
+    """T_radar_enu at each query time: the two surrounding 200 Hz samples (5 ms apart) blended linearly
+    in position and by slerp in rotation."""
+    times_us, positions, slerp, T_applanix_radar = trajectory
+    query_times_us = np.asarray(query_times_us, dtype=np.float64)
+    if query_times_us.min() < times_us[0] or query_times_us.max() > times_us[-1]:
+        raise ValueError("Radar azimuth timestamps exceed gps_post_process.csv coverage.")
+    T_enu_applanix = np.zeros((len(query_times_us), 4, 4))
+    T_enu_applanix[:, 3, 3] = 1.0
+    T_enu_applanix[:, :3, 3] = np.column_stack(
+        [np.interp(query_times_us, times_us, positions[:, axis]) for axis in range(3)]
+    )
+    T_enu_applanix[:, :3, :3] = slerp((query_times_us - times_us[0]) * 1e-6).as_matrix()
+    return np.linalg.inv(T_enu_applanix @ T_applanix_radar)
 
 
 def correct_offsets(radar_frame, radar_frame_idx, seq):
@@ -321,6 +352,10 @@ def run_sequence(
     aug_trans_max_m=0.005,
     aug_rot_max_deg=0.02,
     aug_seed=0,
+    depth_mode="single",
+    depth_channels=1,
+    max_range_m=None,
+    layer_skip_m=0.0,
 ):
     print(f"SequenceID: {seq.ID}")
     print(f"Number of Radar Frames: {len(seq.radar_frames)}")
@@ -332,6 +367,7 @@ def run_sequence(
     radar_frame_idx = max(radar_start_frame, 1)
 
     graph_dir = os.path.join(lidar_results_dir, seq.ID, seq.ID, "graph")
+    applanix_trajectory = load_applanix_radar_trajectory(seq)
     _, submap_vertices = get_submap_vertices(graph_dir=graph_dir)
     T_lidar_robot = build_lidar_to_robot_transform(seq)
 
@@ -341,7 +377,24 @@ def run_sequence(
     mesh_vertices_gpu = None
     mesh_triangles_gpu = None
     aug_rng = np.random.default_rng(aug_seed)
-    tracer = OptixDepthBackend(patch_config, device)
+    if depth_mode == "single":
+        tracer = OptixDepthBackend(patch_config, device)
+        mode_tag = ""
+    else:
+        # Concept test: multi-channel depth from native/optix_range_tracer_multi.
+        try:
+            from postprocessing.optix_multi_backend import MultiChannelDepthBackend
+        except ImportError:  # run as a script from inside postprocessing/
+            from optix_multi_backend import MultiChannelDepthBackend
+
+        tracer = MultiChannelDepthBackend(
+            patch_config, device, depth_mode, depth_channels, max_range_m, layer_skip_m
+        )
+        mode_tag = (
+            f"_bands{depth_channels}_{max_range_m:g}m" if depth_mode == "bands"
+            else f"_layers{depth_channels}_skip{layer_skip_m:g}m"
+        )
+    channel_dims = 0 if depth_mode == "single" else 1  # extra [C] axis before [H, W]
 
     while (
         submap_vertices_idx < len(submap_vertices) - 1
@@ -384,16 +437,9 @@ def run_sequence(
         radar_frame = seq.get_radar(radar_frame_idx)
 
         t0 = perf_counter()
-        poses = [
-            get_inverse_tf(rad_frame.pose)
-            for rad_frame in seq.radar_frames[radar_frame_idx - 1:radar_frame_idx + 2]
-        ]
-        times = [
-            rad_frame.timestamp_micro
-            for rad_frame in seq.radar_frames[radar_frame_idx - 1:radar_frame_idx + 2]
-        ]
-        query_times = radar_frame.timestamps.flatten().tolist()
-        azimuth_poses = np.asarray(interpolate_poses(poses, times, query_times))
+        # Per-azimuth poses from the 200 Hz Applanix trajectory (captures pitch/roll within the scan
+        # that interpolating the 4 Hz radar frame poses misses: up to ~0.9 deg, p95 0.15 deg).
+        azimuth_poses = applanix_radar_poses(applanix_trajectory, radar_frame.timestamps.flatten())
         radar_azimuths = np.asarray(radar_frame.azimuths).reshape(-1)
         pose_time = perf_counter() - t0
         tracer.set_scan(azimuth_poses, radar_azimuths)
@@ -407,26 +453,29 @@ def run_sequence(
                 aug_trans_max_m=aug_trans_max_m,
                 aug_rot_max_deg=aug_rot_max_deg,
             )
-            assert mesh_patches.ndim == 4
+            assert mesh_patches.ndim == 4 + channel_dims
             assert mesh_patches.shape[1] == 1 + num_augments
         else:
             mesh_patches, patch_stats = extract_depth_patches_optix(tracer, np.eye(4))
-            assert mesh_patches.ndim == 3
+            assert mesh_patches.ndim == 3 + channel_dims
         patch_time = perf_counter() - t0
 
-        t0 = perf_counter()
-        shifted_polar = correct_offsets(radar_frame, radar_frame_idx, seq)
-        filtered_polar = cen_filter_2d(
-            shifted_polar,
-            sigma_gauss=15.0,
-            z_q=2.5,
-            noise_scale=0.5,
-        )
-        polar_time = perf_counter() - t0
+        # Radar labels (filtered_labels/) are switched off: they don't depend on the depth mode or the
+        # azimuth poses, so regenerating them only costs time (~0.5 s/frame). Uncomment this block, the
+        # save_labels call and its print below to write them again.
+        # t0 = perf_counter()
+        # shifted_polar = correct_offsets(radar_frame, radar_frame_idx, seq)
+        # filtered_polar = cen_filter_2d(
+        #     shifted_polar,
+        #     sigma_gauss=15.0,
+        #     z_q=2.5,
+        #     noise_scale=0.5,
+        # )
+        # polar_time = perf_counter() - t0
 
         t0 = perf_counter()
         suffix = f"_{method_suffix}" if method_suffix else ""
-        method = f"optix{suffix}_aug" if data_augment else f"optix{suffix}"
+        method = f"optix{suffix}{mode_tag}_aug" if data_augment else f"optix{suffix}{mode_tag}"
         sequence_output_dir = Path(output_root) / seq.ID
         mesh_path = save_patches(
             seq_dir=sequence_output_dir,
@@ -435,22 +484,21 @@ def run_sequence(
             radar_frame=radar_frame.frame,
             method=method,
         )
-        labels_path = save_labels(
-            seq_dir=sequence_output_dir,
-            folder_name="filtered_labels",
-            polar=filtered_polar,
-            radar_frame=radar_frame.frame,
-        )
+        # labels_path = save_labels(
+        #     seq_dir=sequence_output_dir,
+        #     folder_name="filtered_labels",
+        #     polar=filtered_polar,
+        #     radar_frame=radar_frame.frame,
+        # )
         save_time = perf_counter() - t0
 
         num_patches = max(
-            mesh_patches.shape[0] * (mesh_patches.shape[1] if mesh_patches.ndim == 4 else 1),
+            mesh_patches.shape[0] * (mesh_patches.shape[1] if data_augment else 1),
             1,
         )
         print(
             f"Frame {radar_frame.frame} | total {perf_counter() - frame_start:.3f}s | "
-            f"poses {pose_time:.3f}s | patches {patch_time:.3f}s | "
-            f"radar postprocessing {polar_time:.3f}s | save {save_time:.3f}s"
+            f"poses {pose_time:.3f}s | patches {patch_time:.3f}s | save {save_time:.3f}s"
         )
         if mesh_load_stats["mesh_disk_load"] > 0.0:
             print(
@@ -462,7 +510,7 @@ def run_sequence(
             f"avg hit pixels {patch_stats['hit_pixels'] / num_patches:.1f}"
         )
         print(f"  saved: {mesh_path}")
-        print(f"  saved: {labels_path}")
+        # print(f"  saved: {labels_path}")
         if data_augment:
             print(
                 f"  saved augmented patches: shape {list(mesh_patches.shape)} | "
@@ -499,7 +547,28 @@ def main():
         default="",
         help="Suffix for the output patch folder.",
     )
+    parser.add_argument(
+        "--depth-mode",
+        choices=["single", "bands", "layers"],
+        default="single",
+        help="single: closest hit per ray (default, unchanged). bands: closest hit in each of "
+        "--num-bands equal range bands of [0, --max-range-m]. layers: --num-layers surfaces per ray, "
+        "each starting --layer-skip-m past the previous hit. Multi-channel patches are saved as "
+        "[B, C, H, W] ([B, 1 + augments, C, H, W] with --data-augment), and the folder name gets "
+        "_bands<C>_<max>m or _layers<C>_skip<skip>m.",
+    )
+    parser.add_argument("--max-range-m", type=float, default=None,
+                        help="Bands: required upper range. Layers: optional range limit.")
+    parser.add_argument("--num-bands", type=int, default=3)
+    parser.add_argument("--num-layers", type=int, default=3)
+    parser.add_argument("--layer-skip-m", type=float, default=5.0)
     args = parser.parse_args()
+    if args.depth_mode == "bands" and (args.max_range_m is None or args.max_range_m <= 0.0):
+        raise ValueError("--depth-mode bands needs a positive --max-range-m.")
+    if args.depth_mode != "single" and min(args.num_bands, args.num_layers) < 1:
+        raise ValueError("--num-bands and --num-layers must be positive.")
+    if args.layer_skip_m < 0.0:
+        raise ValueError("--layer-skip-m must be non-negative.")
     if args.num_augments < 0:
         raise ValueError("--num-augments must be non-negative.")
     if args.aug_trans_max_m < 0.0:
@@ -559,6 +628,10 @@ def main():
             aug_trans_max_m=args.aug_trans_max_m,
             aug_rot_max_deg=args.aug_rot_max_deg,
             aug_seed=args.aug_seed,
+            depth_mode=args.depth_mode,
+            depth_channels=args.num_bands if args.depth_mode == "bands" else args.num_layers,
+            max_range_m=args.max_range_m,
+            layer_skip_m=args.layer_skip_m,
         )
         if args.sequence_id is None:
             break
